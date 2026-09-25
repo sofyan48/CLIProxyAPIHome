@@ -355,6 +355,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			}
 			addRequestRetryToMetadata(requestRetry, metadata)
 			addConfigModelsToMetadata(metadata, buildOpenAICompatibilityModels(compat.Models, compat.Name, now))
+			metadata["openai_compat_models"] = compat.Models
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
@@ -400,6 +401,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			}
 			addRequestRetryToMetadata(requestRetry, metadata)
 			addConfigModelsToMetadata(metadata, buildOpenAICompatibilityModels(compat.Models, compat.Name, now))
+			metadata["openai_compat_models"] = compat.Models
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}

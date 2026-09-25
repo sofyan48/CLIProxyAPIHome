@@ -437,8 +437,24 @@ func credentialClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
 	return out
 }
 
+// OpenAICompatModelsFromAuth restores the exact configured models, including aliases and pools.
+func OpenAICompatModelsFromAuth(auth *coreauth.Auth) []appconfig.OpenAICompatibilityModel {
+	return credentialOpenAIModels(auth)
+}
+
 // credentialOpenAIModels builds OpenAI-compatible model config from stored model metadata.
 func credentialOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityModel {
+	if auth != nil && auth.Metadata != nil {
+		if raw, ok := auth.Metadata["openai_compat_models"]; ok {
+			data, errMarshal := json.Marshal(raw)
+			if errMarshal == nil {
+				var models []appconfig.OpenAICompatibilityModel
+				if json.Unmarshal(data, &models) == nil {
+					return models
+				}
+			}
+		}
+	}
 	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.OpenAICompatibilityModel, 0, len(pairs))
 	for _, pair := range pairs {

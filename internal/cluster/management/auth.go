@@ -145,6 +145,14 @@ func (h *Handler) putAPIKeyList(c *gin.Context, key string) {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
 		return
 	}
+	if key == "openai-compatibility" {
+		var errDiscover error
+		body, errDiscover = discoverOpenAICompatBody(c.Request.Context(), body)
+		if errDiscover != nil {
+			respondError(c, http.StatusBadRequest, "invalid body", errDiscover)
+			return
+		}
+	}
 	auths, errSynthesize := h.synthesizeAPIKeyBody(key, body)
 	if errSynthesize != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errSynthesize)
@@ -222,6 +230,14 @@ func (h *Handler) patchAPIKey(c *gin.Context, key string) {
 	if errMarshal != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errMarshal)
 		return
+	}
+	if key == "openai-compatibility" {
+		var errDiscover error
+		rawEntry, errDiscover = discoverOpenAICompatBody(ctx, rawEntry)
+		if errDiscover != nil {
+			respondError(c, http.StatusBadRequest, "invalid body", errDiscover)
+			return
+		}
 	}
 	nextAuths, errSynthesize := h.synthesizeAPIKeyBody(key, rawEntry)
 	if errSynthesize != nil {
@@ -629,6 +645,9 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 		item["headers"] = headers
 	}
 	if key == "openai-compatibility" {
+		if models := cluster.OpenAICompatModelsFromAuth(auth); len(models) > 0 {
+			item["models"] = models
+		}
 		name := strings.TrimSpace(attrs["compat_name"])
 		if name == "" {
 			name = strings.TrimSpace(auth.Label)

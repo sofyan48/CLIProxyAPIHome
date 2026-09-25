@@ -4,7 +4,7 @@ EMBED_STATIC_DIR := internal/managementasset/static
 LOCAL_BINARY ?= CLIProxyAPIHome
 DOCKER_IMAGE ?= cliproxyapi-home:embedded-local
 
-.PHONY: embed-local panel-assets-local docker-embed-local run-embedded-local clean-embedded-local
+.PHONY: embed-local panel-assets-local docker-embed-local run-embedded-local run-downloaded-panel-local clean-embedded-local
 
 # Local-only helper. GitHub Actions builds embedded assets independently.
 embed-local: panel-assets-local
@@ -26,6 +26,11 @@ panel-assets-local:
 	cp -R "$(PANEL_WORKDIR)/dist/." "$(EMBED_STATIC_DIR)/"
 
 run-embedded-local: panel-assets-local
+	go run ./cmd/home
+
+# Run with previously downloaded release assets without rebuilding the panel.
+run-downloaded-panel-local:
+	@test -s "$(EMBED_STATIC_DIR)/management.html" || { echo "Missing panel assets in $(EMBED_STATIC_DIR); download the management-panel-static release artifact first"; exit 1; }
 	go run ./cmd/home
 
 clean-embedded-local:
