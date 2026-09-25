@@ -2166,7 +2166,7 @@ Home 会从这些 config-like payload 合成 DB auth records。xAI API-key usage
 | `prefix` | string | 可选模型命名空间前缀。 |
 | `base-url` | string | OpenAI-compatible API base URL。 |
 | `api-key-entries` | array of `OpenAICompatibilityAPIKey` | Provider API keys 和可选代理。 |
-| `models` | array of `OpenAICompatibilityModel` | 模型定义和 alias。 |
+| `models` | array of `OpenAICompatibilityModel` | 模型定义和 alias。`PUT`/`PATCH` 中省略或传入空列表时，使用第一个 API key 从 `base-url` + `/models` 尝试发现一次模型；非空列表保持不变。发现失败时列表仍为空，之后不会自动定期刷新。 |
 | `headers` | object string to string | 额外上游 headers。 |
 | `disable-cooling` | boolean | 可选 provider 级覆盖，优先于全局设置并作用于其全部凭证。`true` 禁用请求错误及 quota cooldown，`false` 显式启用；省略时继承全局值。覆盖 402/403/404、408/500/502/503/504 和模型级 429。 |
 | `request-retry` | integer | 可选 provider 级额外重试轮次覆盖，作用于其全部凭证。`0` 禁用额外轮次；省略或负值继承全局设置。 |

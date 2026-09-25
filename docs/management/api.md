@@ -2166,7 +2166,7 @@ Home synthesizes DB auth records from these config-like payloads. xAI API-key us
 | `prefix` | string | Optional model namespace prefix. |
 | `base-url` | string | OpenAI-compatible API base URL. |
 | `api-key-entries` | array of `OpenAICompatibilityAPIKey` | Provider API keys and optional proxies. |
-| `models` | array of `OpenAICompatibilityModel` | Model definitions and aliases. |
+| `models` | array of `OpenAICompatibilityModel` | Model definitions and aliases. On `PUT`/`PATCH`, an omitted or empty list triggers a best-effort one-time discovery from `base-url` + `/models` using the first API key. Nonempty lists are preserved; discovery failures leave the list empty. Models are not refreshed automatically afterward. |
 | `headers` | object string to string | Extra upstream headers. |
 | `disable-cooling` | boolean | Optional provider override that takes precedence over the global setting for all of its credentials. `true` disables request-error and quota cooldowns; `false` explicitly enables them; omission inherits the global value. Covers 402/403/404, 408/500/502/503/504, and model-level 429. |
 | `request-retry` | integer | Optional provider override for additional retry rounds across all of its credentials. `0` disables additional rounds; omission or a negative value inherits the global setting. |
