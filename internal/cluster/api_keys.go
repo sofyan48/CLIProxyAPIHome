@@ -576,6 +576,17 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 				return errModelGroups
 			}
 			modelGroupsJSON = nextModelGroups
+		} else {
+			inheritedModelGroups, errModelGroups := apiKeyModelGroupsForUser(ctx, tx, userID)
+			if errModelGroups != nil {
+				return errModelGroups
+			}
+			if len(inheritedModelGroups) > 0 {
+				modelGroupsJSON, errModelGroups = apiKeyModelGroupsJSON(inheritedModelGroups)
+				if errModelGroups != nil {
+					return errModelGroups
+				}
+			}
 		}
 		key := strings.TrimSpace(*update.APIKey)
 		existing := &APIKeyRecord{}
@@ -703,6 +714,30 @@ func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id ui
 		return nil, errTransaction
 	}
 	return record, nil
+}
+
+func apiKeyModelGroupsForUser(ctx context.Context, tx *gorm.DB, userID uint) ([]uint, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("database connection is nil")
+	}
+	if userID == 0 {
+		return nil, fmt.Errorf("user id is required")
+	}
+
+	var records []APIKeyRecord
+	if errFind := tx.WithContext(contextOrBackground(ctx)).Where("user_id = ?", userID).Order("id").Find(&records).Error; errFind != nil {
+		return nil, errFind
+	}
+
+	modelGroups := make([]uint, 0)
+	for i := range records {
+		recordModelGroups, errModelGroups := apiKeyModelGroupsFromJSON(records[i].ModelGroups)
+		if errModelGroups != nil {
+			return nil, errModelGroups
+		}
+		modelGroups = append(modelGroups, recordModelGroups...)
+	}
+	return normalizeModelGroupIDs(modelGroups), nil
 }
 
 func ensureAPIKeyValueAvailable(ctx context.Context, tx *gorm.DB, apiKey string, currentID uint) error {

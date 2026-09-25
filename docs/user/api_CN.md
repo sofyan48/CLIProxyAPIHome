@@ -1081,7 +1081,7 @@ Authorization: Bearer user.jwt.token
 | --- | --- | --- | --- |
 | `api_key` | string | no | Client API key。Aliases: `api-key`, `key`, `value`。 |
 | `channels` | array of integer | no | Channel group IDs。空数组或省略表示不限制。 |
-| `model_groups` | array of integer | no | Model group IDs。Alias: `model-groups`；空数组或省略表示不限制。 |
+| `model_groups` | array of integer | no | Model group IDs。Alias: `model-groups`。省略时，Home 会继承该用户所有有效 API key 的 model group 并集；如果没有已限定 scope 的 key，则新 key 不受限制。显式发送空数组可创建不受限制的 key。 |
 
 示例响应：
 

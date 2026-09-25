@@ -1080,7 +1080,7 @@ Fields:
 | --- | --- | --- | --- |
 | `api_key` | string | no | Client API key. Aliases: `api-key`, `key`, `value`. |
 | `channels` | array of integer | no | Channel group IDs. Empty or omitted means non-restrictive. |
-| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`; empty or omitted means non-restrictive. |
+| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. When omitted, Home inherits the union of model groups from the user's active API keys; if none are scoped, the new key is non-restrictive. Send an empty array explicitly to create a non-restrictive key. |
 
 Example response:
 

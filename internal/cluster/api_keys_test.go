@@ -298,6 +298,57 @@ func TestReplaceAPIKeyEntriesUsesLastDuplicateAndPresenceSemantics(t *testing.T)
 	}
 }
 
+func TestCreateAPIKeyForUserInheritsExistingModelGroups(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	_, repo := openAPIKeyTestRepository(t)
+	username := "model-scoped-user"
+	user, errUser := repo.CreateUser(ctx, UserUpdate{Username: &username})
+	if errUser != nil {
+		t.Fatalf("CreateUser() error = %v", errUser)
+	}
+
+	firstGroups := []uint{31, 32}
+	secondGroups := []uint{32, 33}
+	if _, errFirst := repo.CreateAPIKey(ctx, APIKeyEntryUpdate{APIKey: "scoped-key-a", UserID: &user.ID, ModelGroups: &firstGroups}); errFirst != nil {
+		t.Fatalf("CreateAPIKey(first) error = %v", errFirst)
+	}
+	if _, errSecond := repo.CreateAPIKey(ctx, APIKeyEntryUpdate{APIKey: "scoped-key-b", UserID: &user.ID, ModelGroups: &secondGroups}); errSecond != nil {
+		t.Fatalf("CreateAPIKey(second) error = %v", errSecond)
+	}
+
+	inheritedKey := "inherited-scope-key"
+	inherited, errInherited := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &inheritedKey})
+	if errInherited != nil {
+		t.Fatalf("CreateAPIKeyForUser(inherited) error = %v", errInherited)
+	}
+	inheritedGroups, errInheritedGroups := apiKeyModelGroupsFromJSON(inherited.ModelGroups)
+	if errInheritedGroups != nil {
+		t.Fatalf("parse inherited model groups: %v", errInheritedGroups)
+	}
+	if want := []uint{31, 32, 33}; !reflect.DeepEqual(inheritedGroups, want) {
+		t.Fatalf("inherited model groups = %#v, want %#v", inheritedGroups, want)
+	}
+
+	unrestrictedKey := "explicit-unrestricted-key"
+	emptyGroups := []uint{}
+	unrestricted, errUnrestricted := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{
+		APIKey:      &unrestrictedKey,
+		ModelGroups: &emptyGroups,
+	})
+	if errUnrestricted != nil {
+		t.Fatalf("CreateAPIKeyForUser(explicit empty) error = %v", errUnrestricted)
+	}
+	unrestrictedGroups, errUnrestrictedGroups := apiKeyModelGroupsFromJSON(unrestricted.ModelGroups)
+	if errUnrestrictedGroups != nil {
+		t.Fatalf("parse explicit model groups: %v", errUnrestrictedGroups)
+	}
+	if len(unrestrictedGroups) != 0 {
+		t.Fatalf("explicit model groups = %#v, want empty", unrestrictedGroups)
+	}
+}
+
 func TestUpdateAPIKeyForUserRejectsDuplicateRename(t *testing.T) {
 	t.Parallel()
 
