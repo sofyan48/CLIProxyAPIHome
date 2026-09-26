@@ -47,7 +47,7 @@ type Config struct {
 
 	// TrustedProxies lists reverse-proxy IPs or CIDRs whose forwarded client
 	// address headers the HTTP server may trust. Empty disables forwarded headers.
-	TrustedProxies []string `yaml:"trusted-proxies" json:"-"`
+	TrustedProxies []string `yaml:"trusted-proxies" json:"trusted-proxies"`
 
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
@@ -539,6 +539,9 @@ type CodexModel struct {
 
 	// Alias is the client-facing model name that maps to Name.
 	Alias string `yaml:"alias" json:"alias"`
+
+	// SupportConfigurationUpdate enables Responses configuration updates for this model.
+	SupportConfigurationUpdate bool `yaml:"support-configuration-update,omitempty" json:"support-configuration-update,omitempty"`
 
 	// DisplayName is the optional human-readable name shown in model catalogs.
 	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
