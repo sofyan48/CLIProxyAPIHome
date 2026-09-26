@@ -1052,7 +1052,7 @@ API key routes operate only on API keys bound to the authenticated `user.id`.
 
 ### GET `/api-keys`
 
-Lists API keys owned by the authenticated user.
+Lists API keys owned by the authenticated user. Each item includes `display_name` (null when unset); create and update return the same item shape.
 
 Headers:
 
@@ -1069,6 +1069,7 @@ Example response:
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
+      "display_name": "Production key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1080,6 +1081,7 @@ Example response:
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
+      "display_name": "Production key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1104,6 +1106,7 @@ Example request:
 ```json
 {
   "api_key": "client-key",
+  "display_name": "Production key",
   "channels": [1],
   "model_groups": [2]
 }
@@ -1114,6 +1117,7 @@ Fields:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `api_key` | string | no | Client API key. Aliases: `api-key`, `key`, `value`. |
+| `display_name` | string or null | no | Optional label; trimmed, at most 128 Unicode characters, and cannot contain control characters. Empty/whitespace or `null` clears it. |
 | `channels` | array of integer | no | Channel group IDs. Empty or omitted means non-restrictive. |
 | `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. When omitted, Home inherits the union of model groups from the user's active API keys; if none are scoped, the new key is non-restrictive. Send an empty array explicitly to create a non-restrictive key. |
 
@@ -1125,6 +1129,7 @@ Example response:
     "id": 1,
     "api-key": "client-key",
     "api_key": "client-key",
+    "display_name": "Production key",
     "channels": [1],
     "model_groups": [2],
     "created_at": "2026-06-02T10:00:00Z",
@@ -1147,6 +1152,7 @@ Example request:
 {
   "id": 1,
   "api_key": "new-client-key",
+  "display_name": "Renamed key",
   "channels": [],
   "model_groups": []
 }
@@ -1161,6 +1167,7 @@ Fields:
 | `old` | string | conditionally | Target API key value. |
 | `new` | string | no | New API key value. |
 | `new_api_key` | string | no | New API key value. Alias: `new-api-key`. |
+| `display_name` | string or null | no | Optional label; omitted preserves the current value, while empty/whitespace or `null` clears it. Same validation as create. |
 | `channels` | array of integer | no | Replacement channel group IDs. |
 | `model_groups` | array of integer | no | Replacement model group IDs. Alias: `model-groups`. |
 
@@ -1172,6 +1179,7 @@ Common errors:
 { "error": "not_found", "message": "record not found" }
 { "error": "invalid_body", "message": "api key id or value is required" }
 { "error": "api_key_exists", "message": "api key already exists" }
+{ "error": "invalid_display_name", "message": "API key display_name is invalid: control characters are not allowed" }
 ```
 
 ### PATCH `/api-key`

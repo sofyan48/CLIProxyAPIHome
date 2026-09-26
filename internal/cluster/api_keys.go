@@ -43,9 +43,11 @@ type APIKeyEntryUpdate struct {
 }
 
 type APIKeyUserUpdate struct {
-	APIKey      *string
-	Channels    *[]uint
-	ModelGroups *[]uint
+	APIKey         *string
+	DisplayName    *string
+	DisplayNameSet bool
+	Channels       *[]uint
+	ModelGroups    *[]uint
 }
 
 type APIKeySelector struct {
@@ -551,6 +553,14 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 	if update.APIKey == nil || strings.TrimSpace(*update.APIKey) == "" {
 		return nil, fmt.Errorf("api key is required")
 	}
+	var displayName *string
+	if update.DisplayNameSet {
+		var errDisplayName error
+		displayName, errDisplayName = normalizeAPIKeyDisplayName(update.DisplayName)
+		if errDisplayName != nil {
+			return nil, errDisplayName
+		}
+	}
 
 	record := &APIKeyRecord{}
 	ctx = contextOrBackground(ctx)
@@ -594,6 +604,7 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 		switch {
 		case errors.Is(errFirst, gorm.ErrRecordNotFound):
 			record.APIKey = key
+			record.DisplayName = displayName
 			record.UserID = &userID
 			record.Channels = channelsJSON
 			record.ModelGroups = modelGroupsJSON
@@ -603,15 +614,19 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 		case errFirst != nil:
 			return errFirst
 		case existing.DeletedAt.Valid:
+			updates := map[string]any{
+				"user_id":      &userID,
+				"channels":     channelsJSON,
+				"model_groups": modelGroupsJSON,
+				"deleted_at":   nil,
+			}
+			if update.DisplayNameSet {
+				updates["display_name"] = displayName
+			}
 			if errRestore := tx.WithContext(ctx).Unscoped().
 				Model(&APIKeyRecord{}).
 				Where("id = ?", existing.ID).
-				Updates(map[string]any{
-					"user_id":      &userID,
-					"channels":     channelsJSON,
-					"model_groups": modelGroupsJSON,
-					"deleted_at":   nil,
-				}).Error; errRestore != nil {
+				Updates(updates).Error; errRestore != nil {
 				return errRestore
 			}
 			if errReload := tx.WithContext(ctx).Where("id = ?", existing.ID).First(record).Error; errReload != nil {
@@ -621,10 +636,14 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 			if !sameOptionalUint(existing.UserID, &userID) {
 				return ErrAPIKeyExists
 			}
-			if errUpdate := tx.WithContext(ctx).Model(&APIKeyRecord{}).Where("id = ?", existing.ID).Updates(map[string]any{
+			updates := map[string]any{
 				"channels":     channelsJSON,
 				"model_groups": modelGroupsJSON,
-			}).Error; errUpdate != nil {
+			}
+			if update.DisplayNameSet && !sameOptionalString(existing.DisplayName, displayName) {
+				updates["display_name"] = displayName
+			}
+			if errUpdate := tx.WithContext(ctx).Model(&APIKeyRecord{}).Where("id = ?", existing.ID).Updates(updates).Error; errUpdate != nil {
 				return errUpdate
 			}
 			if errReload := tx.WithContext(ctx).Where("id = ?", existing.ID).First(record).Error; errReload != nil {
@@ -651,6 +670,14 @@ func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id ui
 	apiKey = strings.TrimSpace(apiKey)
 	if id == 0 && apiKey == "" {
 		return nil, fmt.Errorf("api key id or value is required")
+	}
+	var displayName *string
+	if update.DisplayNameSet {
+		var errDisplayName error
+		displayName, errDisplayName = normalizeAPIKeyDisplayName(update.DisplayName)
+		if errDisplayName != nil {
+			return nil, errDisplayName
+		}
 	}
 
 	record := &APIKeyRecord{}
@@ -682,6 +709,9 @@ func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id ui
 			if nextKey != strings.TrimSpace(record.APIKey) {
 				updates["api_key"] = nextKey
 			}
+		}
+		if update.DisplayNameSet && !sameOptionalString(record.DisplayName, displayName) {
+			updates["display_name"] = displayName
 		}
 		if update.Channels != nil {
 			channelsJSON, errChannels := apiKeyChannelsJSON(*update.Channels)

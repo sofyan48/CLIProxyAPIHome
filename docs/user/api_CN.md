@@ -1053,7 +1053,7 @@ API key routes 只操作绑定到当前认证 `user.id` 的 API key。
 
 ### GET `/api-keys`
 
-列出当前认证用户拥有的 API key。
+列出当前认证用户拥有的 API key。每项包含 `display_name`（未设置时为 null）；创建和更新接口返回相同的条目格式。
 
 请求头：
 
@@ -1070,6 +1070,7 @@ Authorization: Bearer user.jwt.token
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
+      "display_name": "生产环境 key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1081,6 +1082,7 @@ Authorization: Bearer user.jwt.token
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
+      "display_name": "生产环境 key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1105,6 +1107,7 @@ Authorization: Bearer user.jwt.token
 ```json
 {
   "api_key": "client-key",
+  "display_name": "生产环境 key",
   "channels": [1],
   "model_groups": [2]
 }
@@ -1115,6 +1118,7 @@ Authorization: Bearer user.jwt.token
 | Field | Type | Required | 说明 |
 | --- | --- | --- | --- |
 | `api_key` | string | no | Client API key。Aliases: `api-key`, `key`, `value`。 |
+| `display_name` | string 或 null | no | 可选名称；会去除首尾空白，最多 128 个 Unicode 字符，不允许控制字符。空字符串、纯空白或 `null` 表示清除。 |
 | `channels` | array of integer | no | Channel group IDs。空数组或省略表示不限制。 |
 | `model_groups` | array of integer | no | Model group IDs。Alias: `model-groups`。省略时，Home 会继承该用户所有有效 API key 的 model group 并集；如果没有已限定 scope 的 key，则新 key 不受限制。显式发送空数组可创建不受限制的 key。 |
 
@@ -1126,6 +1130,7 @@ Authorization: Bearer user.jwt.token
     "id": 1,
     "api-key": "client-key",
     "api_key": "client-key",
+    "display_name": "生产环境 key",
     "channels": [1],
     "model_groups": [2],
     "created_at": "2026-06-02T10:00:00Z",
@@ -1148,6 +1153,7 @@ Authorization: Bearer user.jwt.token
 {
   "id": 1,
   "api_key": "new-client-key",
+  "display_name": "重命名的 key",
   "channels": [],
   "model_groups": []
 }
@@ -1162,6 +1168,7 @@ Authorization: Bearer user.jwt.token
 | `old` | string | conditionally | 目标 API key value。 |
 | `new` | string | no | 新 API key value。 |
 | `new_api_key` | string | no | 新 API key value。Alias: `new-api-key`。 |
+| `display_name` | string 或 null | no | 可选名称；省略时保留原值，空字符串、纯空白或 `null` 时清除。校验规则同创建接口。 |
 | `channels` | array of integer | no | 替换 channel group IDs。 |
 | `model_groups` | array of integer | no | 替换 model group IDs。Alias: `model-groups`。 |
 
@@ -1173,6 +1180,7 @@ Authorization: Bearer user.jwt.token
 { "error": "not_found", "message": "record not found" }
 { "error": "invalid_body", "message": "api key id or value is required" }
 { "error": "api_key_exists", "message": "api key already exists" }
+{ "error": "invalid_display_name", "message": "API key display_name is invalid: control characters are not allowed" }
 ```
 
 ### PATCH `/api-key`

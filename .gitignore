@@ -39,3 +39,5 @@ plugins
 .gemini/*
 .worktrees/
 .superpowers/
+.air.toml
+tmp/

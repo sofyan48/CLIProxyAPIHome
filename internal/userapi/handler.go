@@ -57,18 +57,19 @@ type totpRequest struct {
 
 type apiKeyRequest struct {
 	authFields
-	ID              *uint   `json:"id"`
-	APIKey          *string `json:"api_key"`
-	APIKeyDash      *string `json:"api-key"`
-	Key             *string `json:"key"`
-	Value           *string `json:"value"`
-	Old             *string `json:"old"`
-	New             *string `json:"new"`
-	NewAPIKey       *string `json:"new_api_key"`
-	NewAPIKeyDash   *string `json:"new-api-key"`
-	Channels        *[]uint `json:"channels"`
-	ModelGroups     *[]uint `json:"model_groups"`
-	ModelGroupsDash *[]uint `json:"model-groups"`
+	ID              *uint           `json:"id"`
+	APIKey          *string         `json:"api_key"`
+	APIKeyDash      *string         `json:"api-key"`
+	Key             *string         `json:"key"`
+	Value           *string         `json:"value"`
+	Old             *string         `json:"old"`
+	New             *string         `json:"new"`
+	NewAPIKey       *string         `json:"new_api_key"`
+	NewAPIKeyDash   *string         `json:"new-api-key"`
+	DisplayName     json.RawMessage `json:"display_name"`
+	Channels        *[]uint         `json:"channels"`
+	ModelGroups     *[]uint         `json:"model_groups"`
+	ModelGroupsDash *[]uint         `json:"model-groups"`
 }
 
 type passkeyRequest struct {
@@ -497,10 +498,16 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		}
 		key = generated
 	}
+	displayName, displayNameSet, okName := body.displayName(c)
+	if !okName {
+		return
+	}
 	update := cluster.APIKeyUserUpdate{
-		APIKey:      &key,
-		Channels:    body.Channels,
-		ModelGroups: body.modelGroups(),
+		APIKey:         &key,
+		DisplayName:    displayName,
+		DisplayNameSet: displayNameSet,
+		Channels:       body.Channels,
+		ModelGroups:    body.modelGroups(),
 	}
 	apiKeyRecord, errCreate := h.repo.CreateAPIKeyForUser(ctx, record.ID, update)
 	if errCreate != nil {
@@ -536,10 +543,16 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 	}
 	targetKey := body.targetAPIKey(c)
 	newKey := body.newAPIKey(id)
+	displayName, displayNameSet, okName := body.displayName(c)
+	if !okName {
+		return
+	}
 	update := cluster.APIKeyUserUpdate{
-		APIKey:      newKey,
-		Channels:    body.Channels,
-		ModelGroups: body.modelGroups(),
+		APIKey:         newKey,
+		DisplayName:    displayName,
+		DisplayNameSet: displayNameSet,
+		Channels:       body.Channels,
+		ModelGroups:    body.modelGroups(),
 	}
 	apiKeyRecord, errUpdate := h.repo.UpdateAPIKeyForUser(ctx, record.ID, id, targetKey, update)
 	if errUpdate != nil {
@@ -859,6 +872,7 @@ func apiKeyRecordResponse(c *gin.Context, record *cluster.APIKeyRecord) (gin.H, 
 		"id":           record.ID,
 		"api-key":      entry.APIKey,
 		"api_key":      entry.APIKey,
+		"display_name": entry.DisplayName,
 		"channels":     channels,
 		"model_groups": modelGroups,
 		"created_at":   record.CreatedAt,
@@ -955,6 +969,10 @@ func respondAPIKeyWriteError(c *gin.Context, code string, err error) {
 		respondError(c, http.StatusNotFound, "not_found", err)
 		return
 	}
+	if errors.Is(err, cluster.ErrInvalidAPIKeyDisplayName) {
+		respondError(c, http.StatusBadRequest, "invalid_display_name", err)
+		return
+	}
 	if errors.Is(err, cluster.ErrAPIKeyExists) {
 		respondError(c, http.StatusConflict, "api_key_exists", err)
 		return
@@ -1011,6 +1029,18 @@ func (r apiKeyRequest) newAPIKey(id uint) *string {
 		}
 	}
 	return nil
+}
+
+func (r apiKeyRequest) displayName(c *gin.Context) (*string, bool, bool) {
+	if len(r.DisplayName) == 0 {
+		return nil, false, true
+	}
+	var name *string
+	if errName := json.Unmarshal(r.DisplayName, &name); errName != nil {
+		respondError(c, http.StatusBadRequest, "invalid_body", errName)
+		return nil, false, false
+	}
+	return name, true, true
 }
 
 func (r apiKeyRequest) modelGroups() *[]uint {
