@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultTOTPIssuer    = "CLIProxyAPIHome"
+	defaultTOTPIssuer    = "CPAHome"
 	defaultTOTPPeriod    = 30
 	defaultTOTPDigits    = 6
 	defaultTOTPAlgorithm = "SHA1"

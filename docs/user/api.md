@@ -889,6 +889,41 @@ Discount metadata is not returned in this version. Clients must not derive, infe
 
 When `status` is `insufficient_data`, no rate, latency, or throughput is published. Clients must render this as "not enough data", never as full availability. The summary is cluster-wide model health and is cached briefly in-process; it contains no per-user request data.
 
+## Period Limits
+
+### GET `/period-limits`
+
+Returns the authenticated user's configured period-limit windows and current usage. This route is read-only and never exposes another user's limits.
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Only windows with `enabled: true` are enforced. `used`, `limit`, and `remaining` are credit values; `reset_at` is the next known reset timestamp when applicable.
+
+```json
+{
+  "user_id": 42,
+  "timezone": "Asia/Shanghai",
+  "credits": 25,
+  "credits_unlimited": false,
+  "windows": [
+    {
+      "id": "7d",
+      "enabled": true,
+      "limit": 10,
+      "used": 3.5,
+      "remaining": 6.5,
+      "mode": "calendar",
+      "active": true,
+      "window_start": "2026-09-21T00:00:00Z",
+      "window_end": "2026-09-28T00:00:00Z",
+      "reset_at": "2026-09-28T00:00:00Z"
+    }
+  ]
+}
+```
+
 ## Billing
 
 User billing routes are under the `/user` base path, so the full paths are `/user/billing/overview` and `/user/billing/charges`. Both routes require the existing bearer token returned by `/user/register` or `/user/login`, and responses are scoped to the authenticated bearer user only.

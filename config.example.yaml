@@ -51,7 +51,7 @@ user-email:
   # Absolute public URL of the embedded user panel. Production deployments should use HTTPS.
   public-user-url: "https://home.example.com/user.html"
   from-address: "no-reply@example.com"
-  from-name: "CLIProxyAPIHome"
+  from-name: "CPAHome"
   sender:
     type: "smtp"
     smtp:

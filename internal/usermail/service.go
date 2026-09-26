@@ -344,13 +344,13 @@ func messageForPurpose(purpose string, cfg ResolvedConfig, username string) (tim
 	switch purpose {
 	case cluster.UserSecurityTokenPurposeEmailVerification:
 		return cfg.VerificationTTL, "/user/verify-email", Message{
-			Subject: "Verify your CLIProxyAPIHome email",
-			Text:    "Hello " + username + ",\n\nConfirm this email address for your CLIProxyAPIHome account:\n\n{{LINK}}\n\nIf you did not request this, you can ignore this message.",
+			Subject: "Verify your CPAHome email",
+			Text:    "Hello " + username + ",\n\nConfirm this email address for your CPAHome account:\n\n{{LINK}}\n\nIf you did not request this, you can ignore this message.",
 		}
 	case cluster.UserSecurityTokenPurposePasswordReset:
 		return cfg.ResetTTL, "/user/reset-password", Message{
-			Subject: "Reset your CLIProxyAPIHome password",
-			Text:    "Hello " + username + ",\n\nUse this link to set a new password for your CLIProxyAPIHome account:\n\n{{LINK}}\n\nThis link is single-use and expires soon. TOTP and Passkey protections remain enabled.",
+			Subject: "Reset your CPAHome password",
+			Text:    "Hello " + username + ",\n\nUse this link to set a new password for your CPAHome account:\n\n{{LINK}}\n\nThis link is single-use and expires soon. TOTP and Passkey protections remain enabled.",
 		}
 	default:
 		return 0, "", Message{}

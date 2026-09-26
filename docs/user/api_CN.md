@@ -890,6 +890,41 @@ Authorization: Bearer user.jwt.token
 
 `status` 为 `insufficient_data` 时不返回可用率、延迟与吞吐。客户端必须渲染为"数据不足"，绝不能渲染为完全可用。该汇总是集群级的模型健康度，在进程内做短时缓存，不包含任何单个用户的请求数据。
 
+## 周期限额
+
+### GET `/period-limits`
+
+返回当前认证用户配置的周期限额窗口及当前使用量。该路由只读，并且不会暴露其他用户的限额。
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+只有 `enabled: true` 的窗口会被执行。`used`、`limit` 与 `remaining` 均为 credit 数值；适用时，`reset_at` 表示下一次已知重置时间。
+
+```json
+{
+  "user_id": 42,
+  "timezone": "Asia/Shanghai",
+  "credits": 25,
+  "credits_unlimited": false,
+  "windows": [
+    {
+      "id": "7d",
+      "enabled": true,
+      "limit": 10,
+      "used": 3.5,
+      "remaining": 6.5,
+      "mode": "calendar",
+      "active": true,
+      "window_start": "2026-09-21T00:00:00Z",
+      "window_end": "2026-09-28T00:00:00Z",
+      "reset_at": "2026-09-28T00:00:00Z"
+    }
+  ]
+}
+```
+
 ## Billing
 
 用户计费路由位于 `/user` 基础路径下，因此完整路径是 `/user/billing/overview` 和 `/user/billing/charges`。两个路由都需要 `/user/register` 或 `/user/login` 返回的现有 Bearer token，响应只包含当前认证 Bearer 用户的数据。

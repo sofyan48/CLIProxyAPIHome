@@ -113,6 +113,7 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.GET("/me", handler.CurrentUser)
 	group.GET("/billing/overview", handler.CurrentUserBillingOverview)
 	group.GET("/billing/charges", handler.ListCurrentUserBillingCharges)
+	group.GET("/period-limits", handler.CurrentUserPeriodLimits)
 
 	group.POST("/password", handler.ChangePassword)
 	group.PATCH("/password", handler.ChangePassword)
