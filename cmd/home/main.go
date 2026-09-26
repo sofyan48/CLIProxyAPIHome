@@ -437,14 +437,15 @@ func run() int {
 	mgmtOpts := make([]managementhttp.RouteOption, 0, 1)
 	if clusterRepo != nil {
 		mgmtOpts = append(mgmtOpts, managementhttp.WithDatabaseManagement(managementhttp.DatabaseManagementOption{
-			Enabled:          true,
-			Repository:       clusterRepo,
-			Runtime:          rt,
-			NodeIP:           clusterClientAddr,
-			NodePort:         clusterAdvertisedPort,
-			HeartbeatTimeout: nodeCfg.HeartbeatTimeout,
-			ForwardTLSConfig: clusterTLSConfig,
-			QuotaRecollect:   quotaCollector,
+			Enabled:             true,
+			Repository:          clusterRepo,
+			Runtime:             rt,
+			NodeIP:              clusterClientAddr,
+			NodePort:            clusterAdvertisedPort,
+			HeartbeatTimeout:    nodeCfg.HeartbeatTimeout,
+			ForwardTLSConfig:    clusterTLSConfig,
+			QuotaRecollect:      quotaCollector,
+			ResetCreditConsumer: quotaCollector,
 		}))
 	}
 	mgmtBuild, errMgmt := managementhttp.Build(cfgPath, mgmtOpts...)

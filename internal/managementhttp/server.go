@@ -104,14 +104,15 @@ func routePathHasWildcard(path string) bool {
 type RouteOption func(*RouteRegistry)
 
 type ClusterManagementOption struct {
-	Enabled          bool
-	Repository       *cluster.Repository
-	Runtime          *home.Runtime
-	NodeIP           string
-	NodePort         int
-	HeartbeatTimeout time.Duration
-	ForwardTLSConfig *tls.Config
-	QuotaRecollect   clustermanagement.QuotaRecollectTrigger
+	Enabled             bool
+	Repository          *cluster.Repository
+	Runtime             *home.Runtime
+	NodeIP              string
+	NodePort            int
+	HeartbeatTimeout    time.Duration
+	ForwardTLSConfig    *tls.Config
+	QuotaRecollect      clustermanagement.QuotaRecollectTrigger
+	ResetCreditConsumer clustermanagement.CodexResetCreditConsumer
 }
 
 type DatabaseManagementOption = ClusterManagementOption
@@ -143,6 +144,7 @@ func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 		handler.SetHeartbeatTimeout(opt.HeartbeatTimeout)
 		handler.SetForwardTLSConfig(opt.ForwardTLSConfig)
 		handler.SetQuotaRecollectTrigger(opt.QuotaRecollect)
+		handler.SetCodexResetCreditConsumer(opt.ResetCreditConsumer)
 		registerClusterManagementRoutes(r, handler)
 	}
 }
@@ -220,6 +222,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/credentials/:credential_id/cooldown", handler.ClearCredentialCooldown)
 	r.Set(http.MethodGet, "/quota/credentials", handler.ListQuotaCredentials)
 	r.Set(http.MethodGet, "/quota/credentials/:credential_id", handler.GetQuotaCredential)
+	r.Set(http.MethodPost, "/quota/credentials/:credential_id/reset-credits/consume", handler.ConsumeCodexResetCredit)
 	r.Set(http.MethodPost, "/quota/collect", handler.CollectQuota)
 	r.Set(http.MethodGet, "/usage/overview", handler.GetUsageOverview)
 	r.Set(http.MethodGet, "/usage/records", handler.ListUsageRecords)

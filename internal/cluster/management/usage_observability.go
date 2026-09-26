@@ -36,6 +36,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"quota_snapshots":                      true,
 			"quota_snapshot_details":               true,
 			"quota_recollect":                      h.quotaRecollect != nil,
+			"codex_reset_credit_consume":           h.resetCreditConsumer != nil,
 			"usage":                                true,
 			"usage_overview":                       true,
 			"usage_records":                        true,

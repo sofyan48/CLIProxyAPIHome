@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 6
+const currentDatabaseVersion = 7
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -273,8 +273,13 @@ var databaseSnapshotV4Models = databaseSnapshotV4ModelRegistry()
 // databaseSnapshotV5Models is the frozen database snapshot format v5 registry.
 var databaseSnapshotV5Models = databaseSnapshotV5ModelRegistry()
 
+// databaseSnapshotV6Models is the frozen database snapshot format v6 registry.
+var databaseSnapshotV6Models = currentDatabaseModels()
+
 // homeDatabaseModels is the current database snapshot registry.
-var homeDatabaseModels = currentDatabaseModels()
+var homeDatabaseModels = append(append([]databaseModel(nil), databaseSnapshotV6Models...),
+	newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
+)
 
 var databaseMigrationOnlyModels = []databaseModel{
 	newDatabaseModel[schemaMigrationRecord]("home_schema_migration", []string{"id"}, false, false),
@@ -358,6 +363,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
+	case 6:
+		return databaseSnapshotV6Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:
