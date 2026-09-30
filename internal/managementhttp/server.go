@@ -546,6 +546,10 @@ func registerManagementControlPanelRoutes(engine *gin.Engine, handlerFor func(as
 	engine.GET("/index.html", handlerFor(managementasset.IndexFileName))
 	engine.GET("/management.html", handlerFor(managementasset.ManagementFileName))
 	engine.GET("/user.html", handlerFor(managementasset.UserFileName))
+	engine.GET("/admin", handlerFor(managementasset.ManagementFileName))
+	engine.GET("/admin/*filepath", handlerFor(managementasset.ManagementFileName))
+	engine.GET("/app", handlerFor(managementasset.UserFileName))
+	engine.GET("/app/*filepath", handlerFor(managementasset.UserFileName))
 	engine.GET("/assets/*filepath", assetsHandler)
 }
 

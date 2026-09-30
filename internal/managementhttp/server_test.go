@@ -336,7 +336,11 @@ func TestManagementControlPanelRoutesServeEmbeddedAssets(t *testing.T) {
 		{path: "/", body: "bridge"},
 		{path: "/index.html", body: "bridge"},
 		{path: "/management.html", body: "management"},
+		{path: "/admin", body: "management"},
+		{path: "/admin/dashboard", body: "management"},
 		{path: "/user.html", body: "user"},
+		{path: "/app", body: "user"},
+		{path: "/app/login", body: "user"},
 	} {
 		resp := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)

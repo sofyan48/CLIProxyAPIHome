@@ -12,7 +12,7 @@ permissions:
 env:
   GH_REPO: ${{ github.repository }}
   GO_VERSION: '1.26.4'
-  PANEL_REPOSITORY: router-for-me/Home-Management-Center
+  PANEL_REPOSITORY: sofyan48/CPAHomeUI
 
 jobs:
   build-management-panel:
