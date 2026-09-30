@@ -134,6 +134,10 @@ func (h *Handler) DeleteModelGroup(c *gin.Context) {
 		respondModelRecordError(c, "model_group_delete_failed", errDelete)
 		return
 	}
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		return
+	}
 	respondOK(c)
 }
 

@@ -3740,7 +3740,7 @@ Response: `{ "model_group": ... }`.
 
 ### DELETE `/model-groups/:id`
 
-Soft-deletes the model group and its details.
+Soft-deletes the model group and its details. The deleted group ID is also removed from every client API key's `model_groups` binding; other model-scope bindings on those keys are preserved.
 
 Response:
 

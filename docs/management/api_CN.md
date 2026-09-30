@@ -3739,7 +3739,7 @@ Model groups 限制某个客户端 API key 可以使用哪些模型 ID。如果�
 
 ### DELETE `/model-groups/:id`
 
-软删除 model group 及其 details。
+软删除 model group 及其 details，同时从所有客户端 API key 的 `model_groups` 绑定中移除该 group ID；这些 key 上的其他模型范围绑定保持不变。
 
 输出：
 
