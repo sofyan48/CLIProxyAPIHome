@@ -818,6 +818,35 @@ func (r *ModelRegistry) GetModelInfo(modelID, provider string) *ModelInfo {
 	return nil
 }
 
+// GetModelInfosByProvider returns the active provider-specific definitions for a model.
+func (r *ModelRegistry) GetModelInfosByProvider(modelID string) map[string]*ModelInfo {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	registration := r.models[modelID]
+	if registration == nil || len(registration.InfoByProvider) == 0 {
+		return nil
+	}
+
+	infos := make(map[string]*ModelInfo, len(registration.InfoByProvider))
+	for provider, info := range registration.InfoByProvider {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" || info == nil || registration.Providers[provider] <= 0 {
+			continue
+		}
+		infos[provider] = cloneModelInfo(info)
+	}
+	if len(infos) == 0 {
+		return nil
+	}
+	return infos
+}
+
 // GetModelsForClient returns the models registered for a specific client.
 // Parameters:
 //   - clientID: The client identifier (typically auth file name or auth ID)

@@ -692,6 +692,9 @@ Example response:
       "description": "Fast general purpose model.",
       "type": "chat",
       "providers": ["openai"],
+      "provider_limits": [
+        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
+      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": {
@@ -722,8 +725,9 @@ Model fields:
 | `owned_by` | string | Optional upstream owner. |
 | `type` | string | Optional model type, for example `chat`. |
 | `providers[]` | array | Provider identifiers that can serve this model. These are the same identifiers used on usage records and price rules. |
-| `context_length` | number | Maximum input tokens. Omitted when unknown; `context_length` and `inputTokenLimit` upstream spellings are normalized into this one field. |
-| `max_output_tokens` | number | Maximum output tokens. Omitted when unknown; normalizes `max_completion_tokens` and `outputTokenLimit`. |
+| `provider_limits[]` | array | Provider-specific token limits. Each entry contains `provider` and, when known, `context_length` and `max_output_tokens`. |
+| `context_length` | number | Common maximum input tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. `context_length` and `inputTokenLimit` upstream spellings are normalized into this field. |
+| `max_output_tokens` | number | Common maximum output tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. Normalizes `max_completion_tokens` and `outputTokenLimit`. |
 | `modalities` | object | See below. |
 | `capabilities` | object | See below. |
 
@@ -774,6 +778,9 @@ Example response:
       "id": "gpt-4.1-mini",
       "display_name": "GPT-4.1 mini",
       "providers": ["openai"],
+      "provider_limits": [
+        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
+      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": { "status": "known", "input": ["text", "image"], "output": ["text"] },

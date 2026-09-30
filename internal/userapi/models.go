@@ -3,6 +3,7 @@ package userapi
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -258,13 +259,75 @@ func userModelResponse(model *registry.ModelInfo, prices modelPriceIndex) gin.H 
 	if len(providers) > 0 {
 		entry["providers"] = providers
 	}
-	if contextLength := userModelContextLength(model); contextLength > 0 {
-		entry["context_length"] = contextLength
+	providerLimits := userModelProviderLimits(model)
+	if len(providerLimits) > 0 {
+		entry["provider_limits"] = providerLimits
 	}
-	if maxOutputTokens := userModelMaxOutputTokens(model); maxOutputTokens > 0 {
+	if contextLength := commonUserModelLimit(providerLimits, "context_length"); contextLength > 0 {
+		entry["context_length"] = contextLength
+	} else if len(providerLimits) == 0 {
+		if contextLength := userModelContextLength(model); contextLength > 0 {
+			entry["context_length"] = contextLength
+		}
+	}
+	if maxOutputTokens := commonUserModelLimit(providerLimits, "max_output_tokens"); maxOutputTokens > 0 {
 		entry["max_output_tokens"] = maxOutputTokens
+	} else if len(providerLimits) == 0 {
+		if maxOutputTokens := userModelMaxOutputTokens(model); maxOutputTokens > 0 {
+			entry["max_output_tokens"] = maxOutputTokens
+		}
 	}
 	return entry
+}
+
+func userModelProviderLimits(model *registry.ModelInfo) []gin.H {
+	providers := copyNonEmptyStrings(model.Providers)
+	if len(providers) == 0 {
+		return nil
+	}
+
+	infos := registry.GetGlobalRegistry().GetModelInfosByProvider(model.ID)
+	limits := make([]gin.H, 0, len(providers))
+	for _, provider := range providers {
+		info := infos[provider]
+		if info == nil {
+			continue
+		}
+		limit := gin.H{"provider": provider}
+		if contextLength := userModelContextLength(info); contextLength > 0 {
+			limit["context_length"] = contextLength
+		}
+		if maxOutputTokens := userModelMaxOutputTokens(info); maxOutputTokens > 0 {
+			limit["max_output_tokens"] = maxOutputTokens
+		}
+		limits = append(limits, limit)
+	}
+	sort.Slice(limits, func(i, j int) bool {
+		return limits[i]["provider"].(string) < limits[j]["provider"].(string)
+	})
+	return limits
+}
+
+func commonUserModelLimit(limits []gin.H, field string) int {
+	if len(limits) == 0 {
+		return 0
+	}
+
+	common := 0
+	for _, limit := range limits {
+		value, ok := limit[field].(int)
+		if !ok || value <= 0 {
+			return 0
+		}
+		if common == 0 {
+			common = value
+			continue
+		}
+		if value != common {
+			return 0
+		}
+	}
+	return common
 }
 
 // userModelContextLength collapses the two limit spellings the shared catalog
