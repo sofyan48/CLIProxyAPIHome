@@ -2334,7 +2334,12 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 	scope = usageObservabilityStatusScope(scope, query.Status)
 	scope = usageObservabilityStatusCodeScope(scope, query.StatusCode)
 	if requestID := strings.TrimSpace(query.RequestID); requestID != "" {
-		scope = scope.Where(`"usage"."request_id" = ?`, requestID)
+		if len(requestID) == 8 {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(requestID)
+			scope = scope.Where(`"usage"."request_id" LIKE ? ESCAPE '!'`, pattern)
+		} else {
+			scope = scope.Where(`"usage"."request_id" = ?`, requestID)
+		}
 	}
 	// Legacy compatibility: match against both raw identifiers and canonical UUIDv8 projections.
 	// TODO(session-cleanup): Revert to strict single-key matching once legacy raw session rows are phased out.
@@ -2457,7 +2462,12 @@ func usageObservabilityApplyUsageFilters(scope *gorm.DB, query UsageObservabilit
 	scope = usageObservabilityStatusScope(scope, query.Status)
 	scope = usageObservabilityStatusCodeScope(scope, query.StatusCode)
 	if requestID := strings.TrimSpace(query.RequestID); requestID != "" {
-		scope = scope.Where(`"usage"."request_id" = ?`, requestID)
+		if len(requestID) == 8 {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(requestID)
+			scope = scope.Where(`"usage"."request_id" LIKE ? ESCAPE '!'`, pattern)
+		} else {
+			scope = scope.Where(`"usage"."request_id" = ?`, requestID)
+		}
 	}
 	// Legacy compatibility: match against both raw identifiers and canonical UUIDv8 projections.
 	// TODO(session-cleanup): Revert to strict single-key matching once legacy raw session rows are phased out.

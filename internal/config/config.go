@@ -180,6 +180,17 @@ type Config struct {
 
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
+
+	// Settings shared with CPA V8.
+	Discovery                     DiscoveryConfig                     `yaml:"discovery" json:"discovery"`
+	SaveCooldownStatus            bool                                `yaml:"save-cooldown-status" json:"save-cooldown-status"`
+	TransientErrorCooldownSeconds int                                 `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
+	Devin                         DevinConfig                         `yaml:"devin" json:"devin"`
+	XAI                           XAIConfig                           `yaml:"xai" json:"xai"`
+	Codex                         CodexConfig                         `yaml:"codex" json:"codex"`
+	Claude                        ClaudeConfig                        `yaml:"claude" json:"claude"`
+	DisableClaudeCloakMode        bool                                `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
+	OAuthRequestScopedErrors      map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
@@ -195,6 +206,9 @@ type ClaudeHeaderDefaults struct {
 	Arch                   string `yaml:"arch" json:"arch"`
 	Timeout                string `yaml:"timeout" json:"timeout"`
 	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+
+	// Settings shared with CPA V8.
+	Timezone string `yaml:"timezone" json:"timezone"`
 }
 
 // CodexHeaderDefaults configures fallback header values injected into Codex
@@ -209,6 +223,9 @@ type CodexHeaderDefaults struct {
 type AntigravityConfig struct {
 	// SensitiveWords is a list of words to obfuscate with zero-width characters in system instructions.
 	SensitiveWords []string `yaml:"sensitive-words,omitempty" json:"sensitive-words,omitempty"`
+
+	// Settings shared with CPA V8.
+	ConnectionPool AntigravityConnectionPoolConfig `yaml:"connection-pool,omitempty" json:"connection-pool,omitempty"`
 }
 
 // TLSConfig holds HTTPS server settings.
@@ -269,6 +286,9 @@ type RemoteManagement struct {
 	// PanelGitHubRepository is retained for legacy compatibility and version tracking.
 	// Embedded bundle mode does not fetch control panel assets from GitHub at runtime.
 	PanelGitHubRepository string `yaml:"panel-github-repository"`
+
+	// Settings shared with CPA V8.
+	BaseURL string `yaml:"base-url,omitempty" json:"base-url,omitempty"`
 }
 
 // QuotaExceeded defines the behavior when API quota limits are exceeded.
@@ -292,12 +312,6 @@ type RoutingConfig struct {
 	// Supported values: "round-robin" (default), "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
-	// ClaudeCodeSessionAffinity enables session-sticky routing for Claude Code clients.
-	// When enabled, requests with the same session ID (extracted from metadata.user_id)
-	// are routed to the same auth credential when available.
-	// Deprecated: Use SessionAffinity instead for universal session support.
-	ClaudeCodeSessionAffinity bool `yaml:"claude-code-session-affinity,omitempty" json:"claude-code-session-affinity,omitempty"`
-
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Session IDs are extracted from multiple sources:
 	// metadata.user_id (Claude Code session format), X-Session-ID, Session_id (Codex),
@@ -308,6 +322,9 @@ type RoutingConfig struct {
 	// SessionAffinityTTL specifies how long session-to-auth bindings are retained.
 	// Default: 1h. Accepts duration strings like "30m", "1h", "2h30m".
 	SessionAffinityTTL string `yaml:"session-affinity-ttl,omitempty" json:"session-affinity-ttl,omitempty"`
+
+	// Settings shared with CPA V8.
+	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
@@ -319,6 +336,9 @@ type OAuthModelAlias struct {
 	Alias        string `yaml:"alias" json:"alias"`
 	Fork         bool   `yaml:"fork,omitempty" json:"fork,omitempty"`
 	ForceMapping bool   `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+
+	// Settings shared with CPA V8.
+	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
 }
 
 // PayloadConfig defines default and override parameter rules applied to provider payloads.
@@ -439,10 +459,15 @@ type ClaudeKey struct {
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
 
-	// ExperimentalCCHSigning enables opt-in final-body cch signing for cloaked
-	// Claude /v1/messages requests. It is disabled by default so upstream seed
-	// changes do not alter the proxy's legacy behavior.
+	// ExperimentalCCHSigning is retained for configuration compatibility.
+	// CCH signing is automatic for Claude OAuth and supported direct upstreams.
 	ExperimentalCCHSigning bool `yaml:"experimental-cch-signing,omitempty" json:"experimental-cch-signing,omitempty"`
+
+	// Settings shared with CPA V8.
+	Weight                  *int                     `yaml:"weight,omitempty" json:"weight,omitempty"`
+	RebuildMidSystemMessage bool                     `yaml:"rebuild-mid-system-message,omitempty" json:"rebuild-mid-system-message,omitempty"`
+	RequestScopedErrors     []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
+	FingerprintProfile      string                   `yaml:"fingerprint-profile,omitempty" json:"fingerprint-profile,omitempty"`
 }
 
 // GetAPIKey returns an api key.
@@ -464,6 +489,13 @@ type ClaudeModel struct {
 
 	// Alias is the client-facing model name that maps to Name.
 	Alias string `yaml:"alias" json:"alias"`
+
+	// Settings shared with CPA V8.
+	DisplayName      string                    `yaml:"display-name,omitempty" json:"display-name,omitempty"`
+	MaxContextLength int                       `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
+	ForceMapping     bool                      `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+	IsCompat         bool                      `yaml:"is-compat,omitempty" json:"is-compat,omitempty"`
+	Thinking         *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 // GetName returns a name.
@@ -471,6 +503,18 @@ func (m ClaudeModel) GetName() string { return m.Name }
 
 // GetAlias returns an alias.
 func (m ClaudeModel) GetAlias() string { return m.Alias }
+
+// GetDisplayName returns a display name.
+func (m ClaudeModel) GetDisplayName() string { return m.DisplayName }
+
+// GetForceMapping returns whether response model fields should be rewritten.
+func (m ClaudeModel) GetForceMapping() bool { return m.ForceMapping }
+
+// GetThinking returns configured reasoning capabilities.
+func (m ClaudeModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+
+// GetMaxContextLength returns the configured context limit.
+func (m ClaudeModel) GetMaxContextLength() int { return m.MaxContextLength }
 
 // CodexKey represents the configuration for a Codex API key,
 // including the API key itself and an optional base URL for the API endpoint.
@@ -518,6 +562,11 @@ type CodexKey struct {
 	// RequestRetry optionally overrides the global number of additional retry rounds.
 	// Nil or a negative value inherits the global setting; zero disables additional rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+
+	// Settings shared with CPA V8.
+	Weight               *int                     `yaml:"weight,omitempty" json:"weight,omitempty"`
+	DisableCodexCloaking *bool                    `yaml:"disable-codex-cloaking,omitempty" json:"disable-codex-cloaking,omitempty"`
+	RequestScopedErrors  []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 }
 
 // GetAPIKey returns an api key.
@@ -548,6 +597,11 @@ type CodexModel struct {
 
 	// ForceMapping rewrites upstream response model fields back to Alias.
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+
+	// Settings shared with CPA V8.
+	MaxContextLength int                       `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
+	IsCompat         bool                      `yaml:"is-compat,omitempty" json:"is-compat,omitempty"`
+	Thinking         *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 // GetName returns a name.
@@ -555,6 +609,12 @@ func (m CodexModel) GetName() string { return m.Name }
 
 // GetAlias returns an alias.
 func (m CodexModel) GetAlias() string { return m.Alias }
+
+// GetThinking returns configured reasoning capabilities.
+func (m CodexModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+
+// GetMaxContextLength returns the configured context limit.
+func (m CodexModel) GetMaxContextLength() int { return m.MaxContextLength }
 
 // GetDisplayName returns a display name.
 func (m CodexModel) GetDisplayName() string { return m.DisplayName }
@@ -613,6 +673,10 @@ type GeminiKey struct {
 	// RequestRetry optionally overrides the global number of additional retry rounds.
 	// Nil or a negative value inherits the global setting; zero disables additional rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+
+	// Settings shared with CPA V8.
+	Weight              *int                     `yaml:"weight,omitempty" json:"weight,omitempty"`
+	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 }
 
 // GetAPIKey returns an api key.
@@ -640,6 +704,11 @@ type GeminiModel struct {
 
 	// ForceMapping rewrites upstream response model fields back to Alias.
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+
+	// Settings shared with CPA V8.
+	MaxContextLength int                       `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
+	IsCompat         bool                      `yaml:"is-compat,omitempty" json:"is-compat,omitempty"`
+	Thinking         *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 // GetName returns a name.
@@ -647,6 +716,12 @@ func (m GeminiModel) GetName() string { return m.Name }
 
 // GetAlias returns an alias.
 func (m GeminiModel) GetAlias() string { return m.Alias }
+
+// GetThinking returns configured reasoning capabilities.
+func (m GeminiModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+
+// GetMaxContextLength returns the configured context limit.
+func (m GeminiModel) GetMaxContextLength() int { return m.MaxContextLength }
 
 // GetDisplayName returns a display name.
 func (m GeminiModel) GetDisplayName() string { return m.DisplayName }
@@ -693,6 +768,10 @@ type OpenAICompatibility struct {
 	// RequestRetry optionally overrides the global number of additional retry rounds.
 	// Nil or a negative value inherits the global setting; zero disables additional rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+
+	// Settings shared with CPA V8.
+	SupportPromptCacheKey bool                     `yaml:"support-prompt-cache-key,omitempty" json:"support-prompt-cache-key,omitempty"`
+	RequestScopedErrors   []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
@@ -706,6 +785,9 @@ type OpenAICompatibilityAPIKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Settings shared with CPA V8.
+	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
@@ -720,6 +802,16 @@ type OpenAICompatibilityModel struct {
 	// Thinking configures the thinking/reasoning capability for this model.
 	// If nil, the model defaults to level-based reasoning with levels ["low", "medium", "high"].
 	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
+
+	// Settings shared with CPA V8.
+	DisplayName            string   `yaml:"display-name,omitempty" json:"display-name,omitempty"`
+	MaxContextLength       int      `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
+	ForceMapping           bool     `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+	Image                  bool     `yaml:"image,omitempty" json:"image,omitempty"`
+	InputModalities        []string `yaml:"input-modalities,omitempty" json:"input-modalities,omitempty"`
+	OutputModalities       []string `yaml:"output-modalities,omitempty" json:"output-modalities,omitempty"`
+	IsCompat               bool     `yaml:"is-compat,omitempty" json:"is-compat,omitempty"`
+	UseMaxCompletionTokens bool     `yaml:"use-max-completion-tokens,omitempty" json:"use-max-completion-tokens,omitempty"`
 }
 
 // GetName returns a name.
@@ -727,6 +819,12 @@ func (m OpenAICompatibilityModel) GetName() string { return m.Name }
 
 // GetAlias returns an alias.
 func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
+
+// GetThinking returns configured reasoning capabilities.
+func (m OpenAICompatibilityModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+
+// GetMaxContextLength returns the configured context limit.
+func (m OpenAICompatibilityModel) GetMaxContextLength() int { return m.MaxContextLength }
 
 // LoadConfigOptional reads YAML from configFile.
 // If optional is true and the file is missing, it returns a Config with credential defaults.
@@ -795,7 +893,12 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		cfg.RemoteManagement.SecretKey = normalizedSecret
 		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
 		// Preserve YAML comments and ordering; update only the nested key.
-		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, normalizedSecret)
+		secretPath := []string{"remote-management", "secret-key"}
+		var source yaml.Node
+		if yaml.Unmarshal(data, &source) == nil && len(source.Content) > 0 && yamlPath(expandConfigAliases(source.Content[0]), "management.secret-key") != nil {
+			secretPath[0] = "management"
+		}
+		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, secretPath, normalizedSecret)
 	}
 
 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)
@@ -1013,7 +1116,13 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 				continue
 			}
 			seenAlias[aliasKey] = struct{}{}
-			clean = append(clean, OAuthModelAlias{Name: name, Alias: alias, Fork: entry.Fork, ForceMapping: entry.ForceMapping})
+			clean = append(clean, OAuthModelAlias{
+				Name:         name,
+				Alias:        alias,
+				Fork:         entry.Fork,
+				DisplayName:  strings.TrimSpace(entry.DisplayName),
+				ForceMapping: entry.ForceMapping,
+			})
 		}
 		if len(clean) > 0 {
 			out[channel] = clean

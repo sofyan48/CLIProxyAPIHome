@@ -363,7 +363,7 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	case "codex-free":
 		models = GetCodexFreeModels()
 		provider = "codex"
-	case "kimi":
+	case "kimi", "kimi-ai":
 		models = GetKimiModels()
 	case "antigravity":
 		models = GetAntigravityModels()

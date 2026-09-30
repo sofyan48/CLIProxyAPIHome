@@ -25,8 +25,10 @@ import (
 const (
 	kimiClientID    = "17e5f671-d194-4dfb-9706-5516cb48c098"
 	kimiOAuthHost   = "https://auth.kimi.com"
-	kimiTokenURL    = kimiOAuthHost + "/api/oauth/token"
 	kimiHTTPTimeout = 30 * time.Second
+	// KimiDefaultDomain and KimiAIDomain select independent OAuth endpoints.
+	KimiDefaultDomain = "kimi.com"
+	KimiAIDomain      = "kimi.ai"
 )
 
 // ErrRefreshTokenRejected marks an explicit terminal OAuth refresh response.
@@ -54,11 +56,12 @@ func (e *refreshTokenRejectedError) Unwrap() []error {
 type DeviceFlowClient struct {
 	httpClient *http.Client
 	deviceID   string
+	domain     string
 }
 
 // NewDeviceFlowClientWithDeviceIDAndProxyURL creates a new refresh client with proxy override.
 // proxyURL takes precedence over cfg.ProxyURL when non-empty.
-func NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg *config.Config, deviceID string, proxyURL string) *DeviceFlowClient {
+func NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg *config.Config, deviceID string, proxyURL string, domains ...string) *DeviceFlowClient {
 	client := &http.Client{Timeout: kimiHTTPTimeout}
 	effectiveProxyURL := strings.TrimSpace(proxyURL)
 	var sdkCfg config.SDKConfig
@@ -75,9 +78,14 @@ func NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg *config.Config, deviceID str
 	if resolvedDeviceID == "" {
 		resolvedDeviceID = newRandomID(16)
 	}
+	domain := KimiDefaultDomain
+	if len(domains) > 0 {
+		domain = NormalizeKimiDomain(domains[0])
+	}
 	return &DeviceFlowClient{
 		httpClient: client,
 		deviceID:   resolvedDeviceID,
+		domain:     domain,
 	}
 }
 
@@ -151,7 +159,7 @@ func (c *DeviceFlowClient) RefreshToken(ctx context.Context, refreshToken string
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", refreshToken)
 
-	req, errReq := http.NewRequestWithContext(ctx, http.MethodPost, kimiTokenURL, strings.NewReader(data.Encode()))
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodPost, ResolveKimiOAuthHost(c.domain)+"/api/oauth/token", strings.NewReader(data.Encode()))
 	if errReq != nil {
 		return nil, fmt.Errorf("kimi: failed to create refresh request: %w", errReq)
 	}
@@ -225,4 +233,52 @@ func kimiRefreshResponseError(statusCode int, body []byte) error {
 		}
 	}
 	return upstream
+}
+
+// NormalizeKimiDomain keeps endpoint selection limited to the supported Kimi domains.
+func NormalizeKimiDomain(domain string) string {
+	value := strings.ToLower(strings.TrimSpace(domain))
+	if value == "kimi.ai" || value == "ai" || value == "kimi-ai" || strings.HasSuffix(value, ".kimi.ai") {
+		return KimiAIDomain
+	}
+	return KimiDefaultDomain
+}
+
+// ResolveKimiOAuthHost returns the OAuth endpoint for the selected Kimi domain.
+func ResolveKimiOAuthHost(domain string) string {
+	if NormalizeKimiDomain(domain) == KimiAIDomain {
+		return "https://auth.kimi.ai"
+	}
+	return kimiOAuthHost
+}
+
+// ResolveKimiAPIBaseURL matches CPA's base URL, before its versioned API path is appended.
+func ResolveKimiAPIBaseURL(domain string) string {
+	if NormalizeKimiDomain(domain) == KimiAIDomain {
+		return "https://api.kimi.ai/coding"
+	}
+	return "https://api.kimi.com/coding"
+}
+
+// ResolveKimiDomain uses explicit account settings before the provider's default domain.
+func ResolveKimiDomain(provider string, attributes map[string]string, metadata map[string]any) string {
+	values := []string{attributes["domain"], attributes["base_url"]}
+	for _, key := range []string{"domain", "base_url", "type"} {
+		value, _ := metadata[key].(string)
+		values = append(values, value)
+	}
+	values = append(values, provider)
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if parsed, errParse := url.Parse(value); errParse == nil && parsed.Hostname() != "" {
+			value = parsed.Hostname()
+		}
+		if value == "kimi.ai" || value == "ai" || value == "kimi-ai" || strings.HasSuffix(value, ".kimi.ai") {
+			return KimiAIDomain
+		}
+		if value == "kimi.com" || value == "com" || value == "kimi" || strings.HasSuffix(value, ".kimi.com") {
+			return KimiDefaultDomain
+		}
+	}
+	return KimiDefaultDomain
 }

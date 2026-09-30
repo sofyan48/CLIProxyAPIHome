@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 type metadataProxyStore struct {

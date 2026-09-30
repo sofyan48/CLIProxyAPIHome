@@ -18,14 +18,15 @@ func selectorFromConfig(cfg *config.Config) coreauth.Selector {
 	strategy := strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy))
 	var selector coreauth.Selector
 	switch strategy {
+	case "weighted-round-robin", "weightedroundrobin", "wrr":
+		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first", "fillfirst", "ff":
 		selector = &coreauth.FillFirstSelector{}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}
 
-	sessionAffinity := cfg.Routing.ClaudeCodeSessionAffinity || cfg.Routing.SessionAffinity
-	if !sessionAffinity {
+	if !cfg.Routing.SessionAffinity {
 		return selector
 	}
 

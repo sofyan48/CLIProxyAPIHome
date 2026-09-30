@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 // newAssetTestEngine wires the control panel routes against a temporary static

@@ -40,7 +40,7 @@ func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt h
 		return refreshCodex(ctx, cfg, auth)
 	case "claude":
 		return refreshClaude(ctx, cfg, auth)
-	case "kimi":
+	case "kimi", "kimi-ai":
 		return refreshKimi(ctx, cfg, auth)
 	case "antigravity":
 		return refreshAntigravity(ctx, cfg, auth, rt)
@@ -116,10 +116,11 @@ func refreshKimi(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, er
 	if strings.TrimSpace(refreshToken) == "" {
 		return auth, nil
 	}
-	client := kimiauth.NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg, resolveKimiDeviceID(auth), auth.ProxyURL)
+	domain := kimiauth.ResolveKimiDomain(auth.Provider, auth.Attributes, auth.Metadata)
+	client := kimiauth.NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg, resolveKimiDeviceID(auth), auth.ProxyURL, domain)
 	td, err := client.RefreshToken(ctx, refreshToken)
 	if err != nil {
-		return nil, builtInRefreshError("kimi", "provider_refresh", err)
+		return nil, builtInRefreshError(auth.Provider, "provider_refresh", err)
 	}
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
@@ -131,7 +132,12 @@ func refreshKimi(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, er
 	if td.ExpiresAt > 0 {
 		auth.Metadata["expired"] = time.Unix(td.ExpiresAt, 0).UTC().Format(time.RFC3339)
 	}
-	auth.Metadata["type"] = "kimi"
+	provider := "kimi"
+	if domain == kimiauth.KimiAIDomain {
+		provider = "kimi-ai"
+	}
+	auth.Metadata["type"] = provider
+	auth.Metadata["domain"] = domain
 	auth.Metadata["last_refresh"] = time.Now().Format(time.RFC3339)
 	return auth, nil
 }

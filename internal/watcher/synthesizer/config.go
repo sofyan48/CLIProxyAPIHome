@@ -9,6 +9,7 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/modelconfig"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 )
@@ -129,6 +130,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeyEntries(ctx *SynthesisContext, en
 			attrs["api_key"] = key
 		}
 		metadata := map[string]any{}
+		addV8CredentialOptions(entry, attrs, metadata)
 		if entry.DisableCooling != nil {
 			metadata["disable_cooling"] = *entry.DisableCooling
 		}
@@ -188,6 +190,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 			"api_key": key,
 		}
 		metadata := map[string]any{}
+		addV8CredentialOptions(ck, attrs, metadata)
 		if ck.DisableCooling != nil {
 			metadata["disable_cooling"] = *ck.DisableCooling
 		}
@@ -261,6 +264,7 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 			"api_key": key,
 		}
 		metadata := map[string]any{}
+		addV8CredentialOptions(entry, attrs, metadata)
 		if entry.DisableCooling != nil {
 			metadata["disable_cooling"] = *entry.DisableCooling
 		}
@@ -362,6 +366,8 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				"provider_key": providerName,
 			}
 			metadata := map[string]any{}
+			addV8CredentialOptions(compat, attrs, metadata)
+			addV8CredentialOptions(entry, attrs, metadata)
 			if disableCooling != nil {
 				metadata["disable_cooling"] = *disableCooling
 			}
@@ -408,6 +414,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				"provider_key": providerName,
 			}
 			metadata := map[string]any{}
+			addV8CredentialOptions(compat, attrs, metadata)
 			if disableCooling != nil {
 				metadata["disable_cooling"] = *disableCooling
 			}
@@ -466,6 +473,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			"provider_key": providerName,
 		}
 		metadata := map[string]any{}
+		addV8CredentialOptions(compat, attrs, metadata)
 		if compat.DisableCooling != nil {
 			metadata["disable_cooling"] = *compat.DisableCooling
 		}
@@ -575,6 +583,7 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now 
 				info.Thinking = upstream.Thinking
 			}
 		}
+		modelconfig.ApplyConfiguredCapabilities(info, model)
 		out = append(out, info)
 	}
 	return out
@@ -606,11 +615,11 @@ func buildOpenAICompatibilityModels(models []appconfig.OpenAICompatibilityModel,
 			continue
 		}
 		seen[key] = struct{}{}
-		thinking := model.Thinking
-		if thinking == nil {
+		thinking := modelconfig.NormalizeThinkingSupport(model.Thinking)
+		if thinking == nil && !model.Image {
 			thinking = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
 		}
-		out = append(out, &registry.ModelInfo{
+		info := &registry.ModelInfo{
 			ID:          modelID,
 			Object:      "model",
 			Created:     created,
@@ -619,7 +628,20 @@ func buildOpenAICompatibilityModels(models []appconfig.OpenAICompatibilityModel,
 			DisplayName: modelID,
 			UserDefined: false,
 			Thinking:    thinking,
-		})
+		}
+		modelconfig.ApplyConfiguredCapabilities(info, model)
+		info.ConfigDisplayName = strings.TrimSpace(model.DisplayName)
+		if info.ConfigDisplayName != "" {
+			info.DisplayName = info.ConfigDisplayName
+		}
+		info.ForceMapping = model.ForceMapping
+		info.Name = strings.TrimSpace(model.Name)
+		info.SupportedInputModalities = append([]string(nil), model.InputModalities...)
+		info.SupportedOutputModalities = append([]string(nil), model.OutputModalities...)
+		if model.Image {
+			info.Type = "openai-image"
+		}
+		out = append(out, info)
 	}
 	return out
 }

@@ -164,7 +164,7 @@ func (r *Repository) UpsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 	return r.upsertAuthWithResult(ctx, auth, op, false)
 }
 
-// UpsertAuthPreservingDisabled inserts or updates an auth without re-enabling an existing disabled record.
+// UpsertAuthPreservingDisabled preserves disabled state and leaves unchanged provider configurations intact.
 func (r *Repository) UpsertAuthPreservingDisabled(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, error) {
 	record, _, errUpsert := r.upsertAuthWithResult(ctx, auth, op, true)
 	return record, errUpsert
@@ -220,6 +220,29 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 				current, errCurrent := RecordToAuth(&existing)
 				if errCurrent != nil {
 					return errCurrent
+				}
+				if !existing.DeletedAt.Valid {
+					currentConfig, nextConfig := make(map[string]any), make(map[string]any)
+					ApplyCredentialConfigToRoot(currentConfig, []*coreauth.Auth{current})
+					ApplyCredentialConfigToRoot(nextConfig, []*coreauth.Auth{auth})
+					currentJSON, errCurrentJSON := json.Marshal(currentConfig)
+					if errCurrentJSON != nil {
+						return errCurrentJSON
+					}
+					nextJSON, errNextJSON := json.Marshal(nextConfig)
+					if errNextJSON != nil {
+						return errNextJSON
+					}
+					sameConfig, errCompare := semanticJSONEqual(currentJSON, nextJSON)
+					if errCompare != nil {
+						return errCompare
+					}
+					// Re-synthesis changes timestamps and omits runtime state. An unchanged
+					// provider credential must keep its entire persisted row and version.
+					if len(currentConfig) > 0 && sameConfig {
+						out = &existing
+						return nil
+					}
 				}
 				next := auth.Clone()
 				next.Disabled = current.Disabled
@@ -1047,6 +1070,40 @@ func (r *Repository) UpsertConfigValueWithResult(ctx context.Context, key string
 	ctx = contextOrBackground(ctx)
 	result := UpsertResultUnchanged
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Snapshot mutations take this lock before reading config. Legacy edits
+		// must join that order before reading the shared OAuth provider scope.
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
+		if appconfig.IsOAuthProviderRoot(key) {
+			// SQLite needs a write lock before the read so another connection cannot
+			// commit a snapshot while this transaction retains an older OAuth view.
+			if tx.Dialector != nil && tx.Dialector.Name() == "sqlite" {
+				if _, errGate := lockConcurrencyActivationGate(tx); errGate != nil {
+					return errGate
+				}
+			}
+			var scoped ConfigRecord
+			errScope := tx.Where("key = ?", "oauth").First(&scoped).Error
+			if errScope != nil && !errors.Is(errScope, gorm.ErrRecordNotFound) {
+				return errScope
+			}
+			if errScope == nil {
+				var oauth any
+				if errDecode := json.Unmarshal(scoped.Value, &oauth); errDecode != nil {
+					return errDecode
+				}
+				next, changed, errUpdate := appconfig.UpdateOAuthScope(oauth, key, value)
+				if errUpdate != nil {
+					return errUpdate
+				}
+				if changed {
+					if errSave := NewRepository(tx).UpsertConfigValue(ctx, "oauth", next); errSave != nil {
+						return errSave
+					}
+				}
+			}
+		}
 		record := ConfigRecord{}
 		errFirst := tx.Where("key = ?", key).First(&record).Error
 		switch {
@@ -1127,6 +1184,24 @@ func (r *Repository) ReplaceConfigSnapshotWithLifecycleConfig(ctx context.Contex
 		return errDB
 	}
 	ctx = contextOrBackground(ctx)
+	return withConcurrencyTransaction(ctx, db, func(tx *gorm.DB) error {
+		// Preserve the global lock order: API keys, activation gate, credentials, events.
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
+		gate, errGate := lockConcurrencyActivationGate(tx)
+		if errGate != nil {
+			return errGate
+		}
+		return r.replaceConfigSnapshotWithLockedActivationGateTx(ctx, tx, nodeHeartbeatTimeout, gate, values)
+	})
+}
+
+func (r *Repository) replaceConfigSnapshotWithLockedActivationGateTx(ctx context.Context, tx *gorm.DB, nodeHeartbeatTimeout time.Duration, gate *ConcurrencyActivationGateRecord, values map[string]any) error {
+	values, errNormalize := appconfig.NormalizeConfigRoot(values)
+	if errNormalize != nil {
+		return errNormalize
+	}
 	lifecycleValue, lifecycleProvided := values["credential-concurrency"]
 	var nextLifecycle appconfig.CredentialConcurrencyConfig
 	if lifecycleProvided {
@@ -1136,39 +1211,31 @@ func (r *Repository) ReplaceConfigSnapshotWithLifecycleConfig(ctx context.Contex
 			return errConfig
 		}
 	}
-	return withConcurrencyTransaction(ctx, db, func(tx *gorm.DB) error {
-		// Config replacement can emit auth or lifecycle events before it reaches
-		// the API key rows. Acquire this lock first to keep the global order
-		// API keys -> cluster events and avoid a PostgreSQL advisory-lock cycle.
-		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
-			return errLock
+
+	if lifecycleProvided {
+		if _, _, errUpdate := updateLifecycleConfigTx(ctx, tx, nodeHeartbeatTimeout, nextLifecycle); errUpdate != nil {
+			return errUpdate
 		}
-		gate, errGate := lockConcurrencyActivationGate(tx)
-		if errGate != nil {
-			return errGate
-		}
-		if lifecycleProvided {
-			if _, _, errUpdate := updateLifecycleConfigTx(ctx, tx, nodeHeartbeatTimeout, nextLifecycle); errUpdate != nil {
-				return errUpdate
-			}
-		} else if _, errEnsure := ensureLifecycleConfigTx(tx, nodeHeartbeatTimeout); errEnsure != nil {
-			return errEnsure
-		}
-		if errReconcile := r.reconcileConfigSnapshotProviderAuthsTx(ctx, tx, values); errReconcile != nil {
-			return mapCredentialConcurrencyOrphan(errReconcile)
-		}
-		if errImportPolicies := r.importCredentialConcurrencyPoliciesWithLockedActivationGateTx(ctx, tx, gate, values); errImportPolicies != nil {
-			return errImportPolicies
-		}
-		apiKeys, clean, errPrepare := prepareConfigSnapshotReplace(values)
-		if errPrepare != nil {
-			return errPrepare
-		}
-		return replaceConfigSnapshotTx(ctx, tx, apiKeys, clean)
-	})
+	} else if _, errEnsure := ensureLifecycleConfigTx(tx, nodeHeartbeatTimeout); errEnsure != nil {
+		return errEnsure
+	}
+	if errReconcile := r.reconcileConfigSnapshotProviderAuthsTx(ctx, tx, values); errReconcile != nil {
+		return mapCredentialConcurrencyOrphan(errReconcile)
+	}
+	if errImportPolicies := r.importCredentialConcurrencyPoliciesWithLockedActivationGateTx(ctx, tx, gate, values); errImportPolicies != nil {
+		return errImportPolicies
+	}
+	apiKeys, clean, errPrepare := prepareConfigSnapshotReplace(values)
+	if errPrepare != nil {
+		return errPrepare
+	}
+	return replaceConfigSnapshotTx(ctx, tx, apiKeys, clean)
 }
 
 func prepareConfigSnapshotReplace(values map[string]any) ([]string, map[string]json.RawMessage, error) {
+	if _, errSecret := normalizeConfigRootSecrets(values); errSecret != nil {
+		return nil, nil, errSecret
+	}
 	apiKeys := normalizeAPIKeysFromAny(values[configAPIKeysRootKey])
 	clean := make(map[string]json.RawMessage, len(values))
 	for key, value := range values {

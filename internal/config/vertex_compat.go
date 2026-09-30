@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
+)
 
 // VertexCompatKey represents the configuration for Vertex AI-compatible API keys.
 // This supports third-party services that use Vertex AI-style endpoint paths
@@ -49,6 +53,9 @@ type VertexCompatKey struct {
 	// RequestRetry optionally overrides the global number of additional retry rounds.
 	// Nil or a negative value inherits the global setting; zero disables additional rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+
+	// Settings shared with CPA V8.
+	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 }
 
 // GetAPIKey returns an api key.
@@ -71,6 +78,11 @@ type VertexCompatModel struct {
 
 	// Alias is the model name alias that clients will use to reference this model.
 	Alias string `yaml:"alias" json:"alias"`
+
+	// Settings shared with CPA V8.
+	DisplayName  string                    `yaml:"display-name,omitempty" json:"display-name,omitempty"`
+	ForceMapping bool                      `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
+	Thinking     *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
 // GetName returns a name.
@@ -78,6 +90,15 @@ func (m VertexCompatModel) GetName() string { return m.Name }
 
 // GetAlias returns an alias.
 func (m VertexCompatModel) GetAlias() string { return m.Alias }
+
+// GetDisplayName returns a display name.
+func (m VertexCompatModel) GetDisplayName() string { return m.DisplayName }
+
+// GetForceMapping returns whether response model fields should be rewritten.
+func (m VertexCompatModel) GetForceMapping() bool { return m.ForceMapping }
+
+// GetThinking returns configured reasoning capabilities.
+func (m VertexCompatModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
 
 // SanitizeVertexCompatKeys deduplicates and normalizes Vertex-compatible API key credentials.
 func (cfg *Config) SanitizeVertexCompatKeys() {

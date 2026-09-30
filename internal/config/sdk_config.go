@@ -6,6 +6,9 @@ package config
 
 // SDKConfig represents the application's configuration, loaded from a YAML file.
 type SDKConfig struct {
+	// OAuthOnlyFields preserves the scope of v8 provider settings.
+	OAuthOnlyFields map[string]bool `yaml:"-" json:"-"`
+
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
@@ -40,6 +43,17 @@ type SDKConfig struct {
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
+
+	// Settings shared with CPA V8.
+	GPTImage2BaseModel      string           `yaml:"gpt-image-2-base-model,omitempty" json:"gpt-image-2-base-model,omitempty"`
+	VideoResultAuthCacheTTL string           `yaml:"video-result-auth-cache-ttl,omitempty" json:"video-result-auth-cache-ttl,omitempty"`
+	ClaudeCode              ClaudeCodeConfig `yaml:"claude-code" json:"claude-code"`
+}
+
+// ClaudeCodeConfig configures Claude Code compatibility behavior.
+type ClaudeCodeConfig struct {
+	// DisableCloakingModelList disables model ID cloaking in Anthropic model list responses.
+	DisableCloakingModelList bool `yaml:"disable-cloaking-model-list" json:"disable-cloaking-model-list"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.

@@ -808,6 +808,9 @@ func modelMetadataFromAuth(auth *coreauth.Auth) map[string]any {
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		metadata["request_retry"] = requestRetry
 	}
+	if weight, exists := auth.Metadata["weight"]; exists {
+		metadata["weight"] = weight
+	}
 	if len(metadata) == 0 {
 		return nil
 	}

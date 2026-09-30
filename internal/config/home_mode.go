@@ -20,6 +20,9 @@ func ApplyHomeRuntimeScalars(root map[string]any) {
 		root["disable-cooling"] = false
 	}
 	root["ws-auth"] = false
+	if oauth, changed, errScope := UpdateOAuthScope(root["oauth"], "ws-auth", false); errScope == nil && changed {
+		root["oauth"] = oauth
+	}
 }
 
 // ApplyDownstreamHomeModeScalars only applies scalar Home-mode overrides.

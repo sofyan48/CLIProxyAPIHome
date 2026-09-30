@@ -106,6 +106,14 @@ func ImportLocalState(ctx context.Context, opts ImportOptions) (ImportStats, err
 			root = map[string]any{}
 		}
 	}
+	var errNormalize error
+	root, errNormalize = appconfig.NormalizeConfigRoot(root)
+	if errNormalize != nil {
+		return stats, errNormalize
+	}
+	if _, errSecret := normalizeConfigRootSecrets(root); errSecret != nil {
+		return stats, errSecret
+	}
 	cfg, _, errRuntimeConfig := RuntimeConfigFromRoot(root)
 	if errRuntimeConfig != nil {
 		return stats, errRuntimeConfig
@@ -135,20 +143,11 @@ func ImportLocalState(ctx context.Context, opts ImportOptions) (ImportStats, err
 		return stats, errDB
 	}
 	mutationStats := ImportStats{}
-	importsAPIKeys := false
-	for key := range root {
-		if strings.TrimSpace(key) == configAPIKeysRootKey {
-			importsAPIKeys = true
-			break
-		}
-	}
 	errTransaction := withConcurrencyTransaction(ctx, db, func(tx *gorm.DB) error {
-		// Import may emit lifecycle or auth events before reaching api-keys.
-		// Lock the key collection first whenever this import includes it.
-		if importsAPIKeys {
-			if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
-				return errLock
-			}
+		// Config upserts share the snapshot mutation lock. Acquire it before
+		// activation, credential, or event locks even when no API keys are imported.
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
 		}
 		gate, errGate := lockConcurrencyActivationGate(tx)
 		if errGate != nil {

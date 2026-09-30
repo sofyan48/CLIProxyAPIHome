@@ -2,13 +2,15 @@
 
 本文档描述 CLIProxyAPIHome 当前 DB-backed User API。User API 与 Management API 分离，不使用 Management API secret key。
 
+v8 升级将 [Management API](../management/api_CN.md) 更新为 `/v8/management`；User API 仍使用 `/user`，认证和资源路径保持不变。`/user/api-keys` 管理已登录用户的客户端访问密钥；上游 provider 分组由管理接口 `/config/api-keys` 管理，管理员访问密钥操作使用相对于管理基础路径的 `/access/api-keys`。
+
 基础路径：
 
 ```text
 http://<host>:<port>/user
 ```
 
-Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。runtime config 的 `port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
+Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。v8 runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
 ## Runtime 模型
 
@@ -46,7 +48,7 @@ user-email:
 - `verification-token-ttl` 与 `reset-token-ttl` 必须是正数 Go duration 字符串。
 - 配置缺失或无效时，邮箱 capability 保持关闭，但不会阻止 Home 启动。
 - `user-email` 只属于 Home，不会下发到 CPA 节点。
-- Home 默认忽略转发的客户端 IP header。若 Home 前面有明确的反向代理，只在顶层 `trusted-proxies` 中填写该 Nginx/Caddy/负载均衡器的精确 IP 或 CIDR；系统拒绝 trust-all 网段，修改后需要重启。这样既能让注册与找回限流识别真实来源，又不会允许直连客户端伪造地址。
+- Home 默认忽略转发的客户端 IP header。若 Home 前面有明确的反向代理，只在 v8 `server.trusted-proxies`（旧 `trusted-proxies`）中填写该 Nginx/Caddy/负载均衡器的精确 IP 或 CIDR；系统拒绝 trust-all 网段，修改后需要重启。这样既能让注册与找回限流识别真实来源，又不会允许直连客户端伪造地址。
 - 关闭功能会保留数据库中的邮箱状态，但停止新的邮箱修改、验证请求和找回请求。此前签发的 verify/reset token 在过期或被撤销前仍可消费。
 
 ## 认证
@@ -661,6 +663,8 @@ Authorization: Bearer user.jwt.token
 
 两个响应都不包含 Management API 数据、凭据身份、节点身份、路由细节、价格规则 ID、价格规则来源、价格规则备注，以及任何其他用户的数据。
 
+v8 模型元数据也可来自上游分组/key 的模型配置：`display-name`、正数 `max-context-length` 和显式 `thinking` 会进入运行时目录。OpenAI 兼容模型还可声明 `image`、`input-modalities`、`output-modalities`；OAuth 别名可覆盖 `display-name`。这些设置影响现有 User API 响应字段，不新增 `/v8/user` 路由。`weight`、`is-compat` 等凭证选项不作为用户模型字段返回。
+
 ### 三态语义
 
 模型元数据以显式状态而非空值返回，因为"没有人描述过这个模型"绝不能被呈现成"这个模型不具备该能力"：
@@ -717,14 +721,15 @@ Authorization: Bearer user.jwt.token
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 发起 API 请求时使用的字面量模型标识符。不得翻译或改写。 |
-| `display_name` | string | 可选的可读名称。上游未提供时不返回。 |
+| `display_name` | string | 运行时目录的可选可读名称，包括配置的 `display-name` 覆盖值；目录没有名称时省略。 |
 | `description` | string | 可选的上游简介。 |
 | `version` | string | 可选的上游版本号。 |
 | `owned_by` | string | 可选的上游归属方。 |
 | `type` | string | 可选的模型类型，例如 `chat`。 |
 | `providers[]` | array | 能够提供该模型的 provider 标识符，与用量记录和价格规则中使用的标识符一致。 |
-| `context_length` | number | 最大输入 token 数。未知时不返回；上游的 `context_length` 与 `inputTokenLimit` 两种写法在此归一为同一字段。 |
-| `max_output_tokens` | number | 最大输出 token 数。未知时不返回；归一 `max_completion_tokens` 与 `outputTokenLimit`。 |
+| `provider_limits[]` | array | 各 provider 的 token 限制。每项包含 `provider`，并在已知时包含 `context_length` 和 `max_output_tokens`。正数配置 `max-context-length` 会被采用；否则归一目录中的 `context_length` 与 `inputTokenLimit`。 |
+| `context_length` | number | 所有列出 provider 共有的最大输入 token 数。未知或各 provider 限制不同时省略，此时请查看 `provider_limits`。没有 provider 级限制时，采用正数配置 `max-context-length`，或归一目录中的 `context_length` 与 `inputTokenLimit`。 |
+| `max_output_tokens` | number | 所有列出 provider 共有的最大输出 token 数。未知或各 provider 限制不同时省略，此时请查看 `provider_limits`。没有 provider 级限制时，归一 `max_completion_tokens` 与 `outputTokenLimit`。 |
 | `modalities` | object | 见下。 |
 | `capabilities` | object | 见下。 |
 
@@ -738,7 +743,7 @@ Authorization: Bearer user.jwt.token
 
 对外发布的取值范围是 `text`、`image`、`audio`、`video`。文档格式不属于模态，因此不在此返回：部分厂商会把 PDF 列为输入类型，其余厂商并不这样描述输入，若一并发布，就会拿只有部分厂商作出的区分去横向比较所有厂商。
 
-模态数据来自人工维护的模型目录（`models.json`），由人整理而非从上游探测。取值来自厂商文档；厂商自己发布清单的，则以清单为准——Codex 系列取自与目录同仓的 `codex_client_models.json`，其中带有 OpenAI 自己声明的 `input_modalities`。目录未描述的模型返回 `status: "unknown"`，绝不返回空的 `input` 数组——客户端有理由把空数组理解为“仅支持文本”。返回前会做小写化与去重。
+模态数据来自运行时模型注册表。内置条目使用人工维护的模型目录（`models.json`）和 `codex_client_models.json` 等厂商清单；v8 OpenAI 兼容模型定义还可显式提供 `input-modalities` 与 `output-modalities`。没有公布模态信息的模型返回 `status: "unknown"`；返回前会做小写化与去重，客户端不能将元数据缺失理解为“仅支持文本”。
 
 某个模型没有被描述是正常结果，不是待补的缺口，更不该事后用推测填上。少数只公开了上下文与速度、从未说明输入类型的模型预计将长期返回 `unknown`；这是目录按设计工作，不是待办事项。
 
@@ -753,6 +758,8 @@ Authorization: Bearer user.jwt.token
 | `structured_output.status` | string | `supported`、`unsupported` 或 `unknown`。表示模型能否被约束为调用方给定的 schema。该判定在服务端根据参数列表完成，客户端不得自行推导。 |
 | `parameters[]` | array | 可选的请求参数列表。 |
 | `generation_methods[]` | array | 可选的上游生成方法。 |
+
+配置的 thinking levels 在进入注册表前会去除首尾空白、转小写并去重。`none` 启用零预算支持，`auto` 启用动态预算支持。响应仍使用原有 `capabilities.reasoning` 结构；配置键 `zero-allowed` / `dynamic-allowed` 不是响应字段名。
 
 该 route 永远不返回 `pricing` 与 `availability`。它们的缺失本身就是契约，而不是数据缺失：匿名访客无权获取运营方的商务条款。
 

@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	kimiDeviceCodeURL   = kimiOAuthHost + "/api/oauth/device_authorization"
 	defaultPollInterval = 5 * time.Second
 	maxPollDuration     = 15 * time.Minute
 )
@@ -27,6 +26,7 @@ type KimiAuth struct {
 type KimiAuthBundle struct {
 	TokenData *KimiTokenData
 	DeviceID  string
+	Domain    string
 }
 
 type DeviceCodeResponse struct {
@@ -39,8 +39,8 @@ type DeviceCodeResponse struct {
 }
 
 // NewKimiAuth creates a new kimi auth.
-func NewKimiAuth(cfg *config.Config) *KimiAuth {
-	return &KimiAuth{deviceClient: NewDeviceFlowClient(cfg)}
+func NewKimiAuth(cfg *config.Config, domains ...string) *KimiAuth {
+	return &KimiAuth{deviceClient: NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg, "", "", domains...)}
 }
 
 // NewDeviceFlowClient creates a new device flow client.
@@ -73,6 +73,7 @@ func (k *KimiAuth) WaitForAuthorization(ctx context.Context, deviceCode *DeviceC
 	return &KimiAuthBundle{
 		TokenData: tokenData,
 		DeviceID:  k.deviceClient.deviceID,
+		Domain:    NormalizeKimiDomain(k.deviceClient.domain),
 	}, nil
 }
 
@@ -89,7 +90,7 @@ func (c *DeviceFlowClient) RequestDeviceCode(ctx context.Context) (*DeviceCodeRe
 	data := url.Values{}
 	data.Set("client_id", kimiClientID)
 
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, kimiDeviceCodeURL, strings.NewReader(data.Encode()))
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, ResolveKimiOAuthHost(c.domain)+"/api/oauth/device_authorization", strings.NewReader(data.Encode()))
 	if errRequest != nil {
 		return nil, fmt.Errorf("kimi: failed to create device code request: %w", errRequest)
 	}
@@ -180,7 +181,7 @@ func (c *DeviceFlowClient) exchangeDeviceCode(ctx context.Context, deviceCode st
 	data.Set("device_code", strings.TrimSpace(deviceCode))
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, kimiTokenURL, strings.NewReader(data.Encode()))
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, ResolveKimiOAuthHost(c.domain)+"/api/oauth/token", strings.NewReader(data.Encode()))
 	if errRequest != nil {
 		return nil, fmt.Errorf("kimi: failed to create token request: %w", errRequest), false
 	}

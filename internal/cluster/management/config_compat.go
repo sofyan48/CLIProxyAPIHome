@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
-	"gopkg.in/yaml.v3"
 )
 
 // loadRuntimeConfig loads a runtime config.
@@ -62,16 +61,9 @@ func runtimeConfigRoot(cfg *appconfig.Config) (map[string]any, error) {
 	if cfg == nil {
 		cfg = &appconfig.Config{}
 	}
-	data, errMarshal := yaml.Marshal(cfg)
-	if errMarshal != nil {
-		return nil, errMarshal
-	}
-	var root map[string]any
-	if errUnmarshal := yaml.Unmarshal(data, &root); errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-	if root == nil {
-		root = make(map[string]any)
+	root, errRoot := appconfig.LegacyConfigRoot(cfg)
+	if errRoot != nil {
+		return nil, errRoot
 	}
 	for key := range root {
 		if isCredentialConfigKey(key) {
@@ -368,6 +360,8 @@ func normalizeClusterRoutingStrategy(strategy string) (string, bool) {
 	switch normalized {
 	case "", "round-robin", "roundrobin", "rr":
 		return "round-robin", true
+	case "weighted-round-robin", "weightedroundrobin", "wrr":
+		return "weighted-round-robin", true
 	case "fill-first", "fillfirst", "ff":
 		return "fill-first", true
 	default:

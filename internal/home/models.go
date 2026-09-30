@@ -9,6 +9,7 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/modelconfig"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
 
@@ -308,7 +309,7 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 			}
 		}
 		models = applyExcludedModels(models, excluded)
-	case "kimi":
+	case "kimi", "kimi-ai":
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
 	case "xai":
@@ -411,11 +412,11 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 						if modelID == "" {
 							modelID = m.Name
 						}
-						thinking := m.Thinking
-						if thinking == nil {
+						thinking := modelconfig.NormalizeThinkingSupport(m.Thinking)
+						if thinking == nil && !m.Image {
 							thinking = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
 						}
-						ms = append(ms, &ModelInfo{
+						info := &ModelInfo{
 							ID:          modelID,
 							Object:      "model",
 							Created:     time.Now().Unix(),
@@ -424,7 +425,20 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 							DisplayName: modelID,
 							UserDefined: false,
 							Thinking:    thinking,
-						})
+						}
+						modelconfig.ApplyConfiguredCapabilities(info, m)
+						info.ConfigDisplayName = strings.TrimSpace(m.DisplayName)
+						if info.ConfigDisplayName != "" {
+							info.DisplayName = info.ConfigDisplayName
+						}
+						info.ForceMapping = m.ForceMapping
+						info.Name = strings.TrimSpace(m.Name)
+						info.SupportedInputModalities = append([]string(nil), m.InputModalities...)
+						info.SupportedOutputModalities = append([]string(nil), m.OutputModalities...)
+						if m.Image {
+							info.Type = "openai-image"
+						}
+						ms = append(ms, info)
 					}
 					if len(ms) > 0 {
 						if providerKey == "" {
@@ -849,6 +863,7 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*M
 				info.Thinking = upstream.Thinking
 			}
 		}
+		modelconfig.ApplyConfiguredCapabilities(info, model)
 		out = append(out, info)
 	}
 	return out
@@ -959,8 +974,9 @@ func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models 
 	}
 
 	type aliasEntry struct {
-		alias string
-		fork  bool
+		alias       string
+		displayName string
+		fork        bool
 	}
 
 	forward := make(map[string][]aliasEntry, len(aliases))
@@ -974,7 +990,11 @@ func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models 
 			continue
 		}
 		key := strings.ToLower(name)
-		forward[key] = append(forward[key], aliasEntry{alias: alias, fork: aliases[i].Fork})
+		forward[key] = append(forward[key], aliasEntry{
+			alias:       alias,
+			displayName: strings.TrimSpace(aliases[i].DisplayName),
+			fork:        aliases[i].Fork,
+		})
 	}
 	if len(forward) == 0 {
 		return models
@@ -1031,6 +1051,9 @@ func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models 
 			seen[aliasKey] = struct{}{}
 			clone := *model
 			clone.ID = mappedID
+			if entry.displayName != "" {
+				clone.DisplayName = entry.displayName
+			}
 			if clone.Name != "" {
 				clone.Name = rewriteModelInfoName(clone.Name, id, mappedID)
 			}

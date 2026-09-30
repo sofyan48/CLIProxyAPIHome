@@ -331,6 +331,16 @@ func TestRepositoryResolveRootSessionIDMultiLevel(t *testing.T) {
 	if errDB != nil {
 		t.Fatalf("open sqlite: %v", errDB)
 	}
+	sqlDB, errSQLDB := db.DB()
+	if errSQLDB != nil {
+		t.Fatalf("get sqlite handle: %v", errSQLDB)
+	}
+	t.Cleanup(func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sqlite: %v", errClose)
+		}
+	})
+
 	if errMigrate := AutoMigrate(db); errMigrate != nil {
 		t.Fatalf("AutoMigrate: %v", errMigrate)
 	}
