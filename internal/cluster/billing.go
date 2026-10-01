@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -859,6 +860,9 @@ func billingApplyUserCreditDeltaTx(ctx context.Context, tx *gorm.DB, userID uint
 		balanceAfter := balanceBefore + delta
 		if delta == 0 || user.CreditsUnlimited {
 			return balanceBefore, balanceBefore, nil
+		}
+		if math.IsNaN(balanceAfter) || math.IsInf(balanceAfter, 0) {
+			return 0, 0, fmt.Errorf("resulting balance must be finite")
 		}
 		update := tx.WithContext(ctx).
 			Model(&UserRecord{}).

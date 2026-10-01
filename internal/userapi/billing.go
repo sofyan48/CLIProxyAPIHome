@@ -2,6 +2,7 @@ package userapi
 
 import (
 	"fmt"
+
 	"net/http"
 	"strconv"
 	"strings"
@@ -94,10 +95,17 @@ func currentUserBillingOverviewResponse(user *cluster.UserRecord, overview clust
 		currentBalance = user.Credits
 	}
 	return gin.H{
-		"current_balance": currentBalance,
-		"today_spend":     overview.TotalChargeAmount,
-		"month_spend":     overview.TotalChargeAmount,
-		"top_models":      currentUserBillingTopItemsResponse(overview.TopModels),
+		"total_charge_amount":   overview.TotalChargeAmount,
+		"total_recharge_amount": overview.TotalRechargeAmount,
+		"total_deduct_amount":   overview.TotalDeductAmount,
+		"request_count":         overview.RequestCount,
+		"input_tokens":          overview.InputTokens,
+		"output_tokens":         overview.OutputTokens,
+		"cache_tokens":          overview.CacheTokens,
+		"current_balance":       currentBalance,
+		"today_spend":           overview.TotalChargeAmount,
+		"month_spend":           overview.TotalChargeAmount,
+		"top_models":            currentUserBillingTopItemsResponse(overview.TopModels),
 	}
 }
 

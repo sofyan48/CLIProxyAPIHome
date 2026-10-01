@@ -177,6 +177,8 @@ The table below is extracted from the User API route group registered by `intern
 | `DELETE` | `/totp` |
 | `GET` | `/billing/overview` |
 | `GET` | `/billing/charges` |
+| `GET` | `/billing/balance-records` |
+| `POST` | `/billing/recharge` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -940,9 +942,9 @@ Only windows with `enabled: true` are enforced. `used`, `limit`, and `remaining`
 
 ## Billing
 
-User billing routes are under the `/user` base path, so the full paths are `/user/billing/overview` and `/user/billing/charges`. Both routes require the existing bearer token returned by `/user/register` or `/user/login`, and responses are scoped to the authenticated bearer user only.
+User billing routes are under the `/user` base path: `/user/billing/overview`, `/user/billing/charges`, `/user/billing/balance-records`, and `/user/billing/recharge`. All require the existing bearer session. Identity comes strictly from that session; supplied `user_id` values in query parameters or JSON are ignored.
 
-User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, `balance_before`, or other users' data.
+User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, or other users' data. Charge items omit `balance_before`; balance ledger items include it but omit stored notes and operator metadata.
 
 User billing `from` and `to` query parameters accept `YYYY-MM-DD`, RFC3339, or Unix seconds and use the half-open interval `[from,to)`. Unix-second values must be between `2000-01-01T00:00:00Z` and `9999-12-31T23:59:59Z`; millisecond timestamps are rejected. A date-only `to` becomes the next UTC midnight so the whole ending UTC day is included. Explicit timestamp `to` values are exact exclusive boundaries and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries from local midnight to the next local midnight, for example `2026-06-10T00:00:00+08:00` through `2026-06-11T00:00:00+08:00`.
 
@@ -991,6 +993,29 @@ Overview fields:
 | `today_spend` | number | Spend value returned by the current billing overview query. |
 | `month_spend` | number | Spend value returned by the current billing overview query. |
 | `top_models[]` | array | Model spend entries with `id`, `label`, `amount`, and `request_count`. |
+| `total_charge_amount` | number | User charge total in the selected range. |
+| `total_recharge_amount` | number | User recharge ledger total in the selected range. |
+| `total_deduct_amount` | number | User manual deduction ledger total in the selected range (not request charges). |
+| `request_count` | integer | User billed request count in the selected range. |
+| `input_tokens`, `output_tokens`, `cache_tokens` | integer | User billed token totals in the selected range. |
+
+Without date filters, totals cover all available records. `current_balance` is always the current balance, not a historical balance. Existing `today_spend` and `month_spend` retain their behavior: both report the selected range's charge total.
+
+### GET `/billing/balance-records`
+
+Returns only the session user's recharge and manual deduction ledger records, newest first. Supports the same `from`/`to` boundaries as charges and `limit` (default `50`, maximum `200`) / `offset` (default `0`). Non-positive/non-integer limits and negative/non-integer offsets return `400`. Supplied user filters are ignored.
+
+Response: `200 { "items": BalanceRecord[], "total": integer, "limit": integer, "offset": integer }`. `total` counts the user's matching records before pagination; empty pages return `items: []`.
+
+`BalanceRecord` fields: `id` (string), `type` (`recharge` or `deduct`), `amount` (number), `balance_before` (number), `balance_after` (number), and `created_at` (RFC3339 string). Notes, operator metadata, and user IDs are not exposed.
+
+### POST `/billing/recharge`
+
+**Unrestricted self-credit:** directly credits the session user's balance without payment, voucher, or administrator approval. This is not a payment integration. Every successful request applies another recharge; there is no idempotency key.
+
+Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. Optional `note` is a string, trimmed and stored in the ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
+
+Response: `200 { "record": BalanceRecord, "current_balance": number }`. Balance mutation and ledger creation use one database transaction via `ApplyBillingBalanceRecord`. Existing `credits_unlimited` behavior is preserved: the ledger records the recharge but the numeric balance is unchanged. Authentication failures return `401`. Database failures (including a resulting balance overflow) return `500 billing_recharge_failed` without a partial ledger/balance mutation.
 
 ### GET `/billing/charges`
 
