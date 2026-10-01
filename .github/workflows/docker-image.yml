@@ -8,47 +8,9 @@ on:
 env:
   APP_NAME: CLIProxyAPIHome
   DOCKERHUB_REPO: eceasy/cli-proxy-api-home
-  PANEL_REPOSITORY: sofyan48/CPAHomeUI
 
 jobs:
-  build-management-panel:
-    name: build embedded management panel
-    runs-on: ubuntu-latest
-    steps:
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.0'
-      - name: Check panel repository token
-        env:
-          PANEL_REPOSITORY_TOKEN: ${{ secrets.HOME_MANAGEMENT_CENTER_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PANEL_REPOSITORY_TOKEN}" ]]; then
-            echo "HOME_MANAGEMENT_CENTER_TOKEN secret is required to read ${PANEL_REPOSITORY}" >&2
-            exit 1
-          fi
-      - name: Build embedded management panel
-        env:
-          GH_TOKEN: ${{ secrets.HOME_MANAGEMENT_CENTER_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh repo clone "${PANEL_REPOSITORY}" /tmp/home-management-center -- --depth 1
-          cd /tmp/home-management-center
-          bun install --frozen-lockfile
-          bun run build:embedded
-          rm -rf "${GITHUB_WORKSPACE}/internal/managementasset/static"
-          mkdir -p "${GITHUB_WORKSPACE}/internal/managementasset/static"
-          touch "${GITHUB_WORKSPACE}/internal/managementasset/static/.gitkeep"
-          cp -R dist/. "${GITHUB_WORKSPACE}/internal/managementasset/static/"
-          test -s "${GITHUB_WORKSPACE}/internal/managementasset/static/management.html"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: management-panel-static
-          path: internal/managementasset/static/**
-          if-no-files-found: error
-
   docker_amd64:
-    needs: build-management-panel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,12 +19,6 @@ jobs:
         run: |
           git fetch --depth 1 https://github.com/router-for-me/models.git main
           git show FETCH_HEAD:models.json > internal/registry/models/models.json
-      - uses: actions/download-artifact@v4
-        with:
-          name: management-panel-static
-          path: internal/managementasset/static
-      - name: Verify embedded management panel
-        run: test -s internal/managementasset/static/management.html
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to DockerHub
@@ -90,7 +46,6 @@ jobs:
             ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-amd64
 
   docker_arm64:
-    needs: build-management-panel
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
@@ -99,12 +54,6 @@ jobs:
         run: |
           git fetch --depth 1 https://github.com/router-for-me/models.git main
           git show FETCH_HEAD:models.json > internal/registry/models/models.json
-      - uses: actions/download-artifact@v4
-        with:
-          name: management-panel-static
-          path: internal/managementasset/static
-      - name: Verify embedded management panel
-        run: test -s internal/managementasset/static/management.html
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to DockerHub

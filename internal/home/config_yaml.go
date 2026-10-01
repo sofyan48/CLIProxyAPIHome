@@ -125,6 +125,20 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("home runtime: config is empty")
 	}
 
+	var source map[string]any
+	if errDecode := yaml.Unmarshal(payload, &source); errDecode != nil {
+		return nil, fmt.Errorf("home runtime: unmarshal config: %w", errDecode)
+	}
+	normalized, errNormalize := appconfig.NormalizeConfigRoot(source)
+	if errNormalize != nil {
+		return nil, fmt.Errorf("home runtime: normalize config: %w", errNormalize)
+	}
+	var errMarshal error
+	payload, errMarshal = yaml.Marshal(normalized)
+	if errMarshal != nil {
+		return nil, fmt.Errorf("home runtime: marshal config: %w", errMarshal)
+	}
+
 	var yamlRoot yaml.Node
 	if errUnmarshal := yaml.Unmarshal(payload, &yamlRoot); errUnmarshal != nil {
 		return nil, fmt.Errorf("home runtime: unmarshal config: %w", errUnmarshal)

@@ -166,6 +166,12 @@ func (h *Handler) PutConfigRoot(route string) gin.HandlerFunc {
 			return
 		}
 		root[key] = value
+		if oauth, changed, errScope := appconfig.UpdateOAuthScope(root["oauth"], key, value); errScope != nil {
+			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errScope)
+			return
+		} else if changed {
+			root["oauth"] = oauth
+		}
 		if _, errConfig := configFromRoot(root); errConfig != nil {
 			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
 			return
@@ -206,6 +212,12 @@ func (h *Handler) PatchConfigRoot(route string) gin.HandlerFunc {
 		} else {
 			root[key] = mergeConfigPatch(current, patch)
 		}
+		if oauth, changed, errScope := appconfig.UpdateOAuthScope(root["oauth"], key, root[key]); errScope != nil {
+			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errScope)
+			return
+		} else if changed {
+			root["oauth"] = oauth
+		}
 		if _, errConfig := configFromRoot(root); errConfig != nil {
 			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
 			return
@@ -235,6 +247,12 @@ func (h *Handler) DeleteConfigRoot(route string) gin.HandlerFunc {
 			return
 		}
 		delete(root, key)
+		if oauth, changed, errScope := appconfig.UpdateOAuthScope(root["oauth"], key, nil); errScope != nil {
+			respondError(c, http.StatusBadRequest, "invalid_config", errScope)
+			return
+		} else if changed {
+			root["oauth"] = oauth
+		}
 		if _, errConfig := configFromRoot(root); errConfig != nil {
 			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
 			return
@@ -300,7 +318,7 @@ func rawConfigRootFromYAML(data []byte) (map[string]any, error) {
 	if root == nil {
 		root = make(map[string]any)
 	}
-	return root, nil
+	return appconfig.NormalizeConfigRoot(root)
 }
 
 // configRootFromYAML derives config root from yaml.

@@ -1145,7 +1145,7 @@ func isBuiltInSelector(selector Selector) bool {
 
 // selectionArgForSelector returns a selection arg for selector.
 func selectionArgForSelector(selector Selector, routeModel string) string {
-	if isBuiltInSelector(selector) {
+	if _, weighted := selector.(*WeightedRoundRobinSelector); weighted || isBuiltInSelector(selector) {
 		return ""
 	}
 	return routeModel
@@ -1381,6 +1381,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		}
 	}
 
+	filterWeights := !m.hasPluginScheduler()
 	allowedAuthIDs := allowedAuthIDsFromOptions(opts)
 	normalizedProviders := normalizeProviderKeys(providers)
 	if len(normalizedProviders) == 0 {
@@ -1405,6 +1406,9 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		var earliest time.Time
 		for _, candidate := range m.auths {
 			if candidate == nil || candidate.Disabled {
+				continue
+			}
+			if filterWeights && isWeightedSelector(selector) && authWeight(candidate) <= 0 {
 				continue
 			}
 			if !requestRetryRoundAllowed(candidate, retryRound, defaultRequestRetry) {
@@ -1559,9 +1563,13 @@ func (m *Manager) scanDispatchAvailability(providers []string, routeModel string
 	registryRef := registry.GetGlobalRegistry()
 	retryRound := requestRetryRoundFromOptions(opts)
 
+	filterWeights := !m.hasPluginScheduler()
 	m.mu.RLock()
 	for _, candidate := range m.auths {
 		if candidate == nil || candidate.Disabled || candidate.Status == StatusDisabled {
+			continue
+		}
+		if filterWeights && isWeightedSelector(m.selector) && authWeight(candidate) <= 0 {
 			continue
 		}
 		if !requestRetryRoundAllowed(candidate, retryRound, defaultRequestRetry) {
@@ -2010,7 +2018,7 @@ func unsupportedRefreshDiagnostic(auth *Auth) string {
 	}
 	reason := "no_refresh_handler"
 	switch provider {
-	case "codex", "claude", "kimi", "antigravity", "xai":
+	case "codex", "claude", "kimi", "kimi-ai", "antigravity", "xai":
 		if auth == nil || strings.TrimSpace(metaStringValue(auth.Metadata, "refresh_token")) == "" {
 			reason = "missing_refresh_token"
 		}
@@ -2212,7 +2220,7 @@ func authSupportsBuiltInRefresh(auth *Auth) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
-	case "codex", "claude", "kimi", "antigravity", "xai":
+	case "codex", "claude", "kimi", "kimi-ai", "antigravity", "xai":
 		return metaStringValue(auth.Metadata, "refresh_token") != ""
 	case "meta":
 		return extractMetaDCAToken(auth) != ""

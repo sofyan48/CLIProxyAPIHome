@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,9 +26,10 @@ func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
 	defer cleanup()
 
 	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	requestID := "018f3a5b-1234-7abc-def0-12345678abcd"
 	records := []cluster.AppLogRecord{
 		{Timestamp: now.Add(-time.Minute), ClientIP: "10.0.0.6", RequestID: "req-other", HomeIP: "192.0.2.10", Level: "info", Line: "ignored", CreatedAt: now.Add(-time.Minute)},
-		{Timestamp: now, ClientIP: "10.0.0.5", RequestID: "req-1", HomeIP: "192.0.2.10", Level: "warn", Line: "wanted", CreatedAt: now},
+		{Timestamp: now, ClientIP: "10.0.0.5", RequestID: requestID, HomeIP: "192.0.2.10", Level: "warn", Line: "wanted", CreatedAt: now},
 	}
 	if errCreate := db.Create(&records).Error; errCreate != nil {
 		t.Fatalf("create logs: %v", errCreate)
@@ -37,7 +40,7 @@ func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
 	engine.GET("/logs", handler.GetLogs)
 
 	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/logs?home_ip=192.0.2.10&request_id=req-1&limit=10", nil)
+	req := httptest.NewRequest(http.MethodGet, "/logs?home_ip=192.0.2.10&request_id="+requestID+"&limit=10", nil)
 	engine.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusOK {
@@ -62,11 +65,18 @@ func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
 	if body.Total != 1 || len(body.Logs) != 1 {
 		t.Fatalf("logs total=%d len=%d, want 1", body.Total, len(body.Logs))
 	}
-	if body.Logs[0].ClientIP != "10.0.0.5" || body.Logs[0].RequestID != "req-1" || body.Logs[0].HomeIP != "192.0.2.10" || body.Logs[0].Level != "warn" || body.Logs[0].Line != "wanted" {
+	if body.Logs[0].ClientIP != "10.0.0.5" || body.Logs[0].RequestID != "5678abcd" || body.Logs[0].HomeIP != "192.0.2.10" || body.Logs[0].Level != "warn" || body.Logs[0].Line != "wanted" {
 		t.Fatalf("unexpected log record: %+v", body.Logs[0])
 	}
 	if body.Limit != 10 || body.Offset != 0 {
 		t.Fatalf("pagination = limit %d offset %d, want 10/0", body.Limit, body.Offset)
+	}
+	var stored cluster.AppLogRecord
+	if errRead := db.First(&stored, records[1].ID).Error; errRead != nil {
+		t.Fatalf("read stored app log: %v", errRead)
+	}
+	if stored.RequestID != requestID {
+		t.Fatalf("stored request_id = %q, want full ID %q", stored.RequestID, requestID)
 	}
 }
 
@@ -138,6 +148,109 @@ func TestDeleteLogsClearsDatabaseAppLogs(t *testing.T) {
 	}
 }
 
+func TestRequestIDSearchReturnsDistinctCandidates(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+	repo := cluster.NewRepository(db)
+	requestIDs := []string{
+		"018f3a5b-1234-7abc-def0-12345678abcd",
+		"018f3a5b-5678-7abc-def0-99995678abcd",
+		"prefix-5678abcd-not-a-suffix",
+		"literal-a_%!tail",
+		"req-1",
+	}
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	for index, requestID := range requestIDs {
+		timestamp := now.Add(time.Duration(index) * time.Second)
+		record := cluster.AppLogRecord{
+			Timestamp: timestamp,
+			ClientIP:  "10.0.0.5",
+			RequestID: requestID,
+			HomeIP:    "192.0.2.10",
+			Level:     "info",
+			Line:      "request log",
+			CreatedAt: timestamp,
+		}
+		if errCreate := db.Create(&record).Error; errCreate != nil {
+			t.Fatalf("create app log: %v", errCreate)
+		}
+		payload := fmt.Sprintf(`{"timestamp":%q,"request_id":%q,"provider":"openai","model":"gpt-4.1-mini","tokens":{"total_tokens":1}}`, timestamp.Format(time.RFC3339), requestID)
+		if _, errUsage := repo.AppendUsageWithRuntime(t.Context(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.10"}); errUsage != nil {
+			t.Fatalf("append usage: %v", errUsage)
+		}
+	}
+	handler := NewHandler(repo, nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/logs", handler.GetLogs)
+	engine.GET("/usage/records", handler.ListUsageRecords)
+	engine.GET("/request-logs", handler.ListRequestLogs)
+	engine.GET("/request-events", handler.ListRequestEvents)
+	for _, endpoint := range []string{"/logs", "/usage/records", "/request-logs", "/request-events"} {
+		t.Run(endpoint, func(t *testing.T) {
+			for _, tt := range []struct {
+				name      string
+				query     string
+				wantIDs   []string
+				wantTotal int64
+			}{
+				{name: "full ID stays exact", query: "request_id=" + requestIDs[0], wantIDs: requestIDs[:1], wantTotal: 1},
+				{name: "eight characters return both candidates", query: "request_id=5678abcd", wantIDs: requestIDs[:2], wantTotal: 2},
+				{name: "shorter ID stays exact", query: "request_id=req-1", wantIDs: requestIDs[4:], wantTotal: 1},
+				{name: "longer custom ID stays exact", query: "request_id=" + requestIDs[2], wantIDs: requestIDs[2:3], wantTotal: 1},
+				{name: "suffix is literal", query: "request_id=" + url.QueryEscape("a_%!tail"), wantIDs: requestIDs[3:4], wantTotal: 1},
+				{name: "pagination keeps candidate count", query: "request_id=5678abcd&limit=1&offset=1", wantIDs: requestIDs[:1], wantTotal: 2},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					resp := httptest.NewRecorder()
+					engine.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, endpoint+"?"+tt.query, nil))
+					if resp.Code != http.StatusOK {
+						t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+					}
+					var response struct {
+						Logs []struct {
+							ID        json.RawMessage `json:"id"`
+							RequestID string          `json:"request_id"`
+						} `json:"logs"`
+						Items []struct {
+							ID        json.RawMessage `json:"id"`
+							RequestID string          `json:"request_id"`
+						} `json:"items"`
+						Total int64 `json:"total"`
+					}
+					if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+						t.Fatalf("decode response: %v", errDecode)
+					}
+					items := response.Items
+					if endpoint == "/logs" {
+						items = response.Logs
+					}
+					if response.Total != tt.wantTotal || len(items) != len(tt.wantIDs) {
+						t.Fatalf("total=%d items=%d, want total=%d items=%d", response.Total, len(items), tt.wantTotal, len(tt.wantIDs))
+					}
+					remaining := make(map[string]int, len(tt.wantIDs))
+					for _, requestID := range tt.wantIDs {
+						if endpoint == "/logs" && len(requestID) > 8 {
+							requestID = requestID[len(requestID)-8:]
+						}
+						remaining[requestID]++
+					}
+					seen := make(map[string]bool, len(items))
+					for _, item := range items {
+						if remaining[item.RequestID] == 0 {
+							t.Fatalf("unexpected request_id %q", item.RequestID)
+						}
+						remaining[item.RequestID]--
+						if len(item.ID) == 0 || seen[string(item.ID)] {
+							t.Fatalf("missing or duplicate record id %s", item.ID)
+						}
+						seen[string(item.ID)] = true
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDownloadRequestLogByIDUsesRequestIDOnlyForFileMatch(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
@@ -148,16 +261,33 @@ func TestDownloadRequestLogByIDUsesRequestIDOnlyForFileMatch(t *testing.T) {
 		t.Fatalf("mkdir logs: %v", errMkdir)
 	}
 	content := "request log content\n"
-	fileName := "10.0.0.9-v1-responses-2026-05-29T010203-req-1.log"
+	requestID := "018f3a5b-1234-7abc-def0-12345678abcd"
+	fileName := "10.0.0.9-v1-responses-2026-05-29T010203-" + requestID + ".log"
 	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
 		t.Fatalf("write request log: %v", errWrite)
 	}
+	collidingFileName := "10.0.0.9-v1-responses-2026-05-29T010204-018f3a5b-5678-7abc-def0-99995678abcd.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", collidingFileName), []byte("another request\n"), 0o644); errWrite != nil {
+		t.Fatalf("write colliding request log: %v", errWrite)
+	}
+	uniqueFileName := "10.0.0.9-v1-responses-2026-05-29T010205-018f3a5b-1234-7abc-def0-1234f0baf00d.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", uniqueFileName), []byte("unique request\n"), 0o644); errWrite != nil {
+		t.Fatalf("write unique request log: %v", errWrite)
+	}
 
 	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	// The later filename has an older modification time.
+	if errChtimes := os.Chtimes(filepath.Join("logs", fileName), now, now); errChtimes != nil {
+		t.Fatalf("set request log modification time: %v", errChtimes)
+	}
+	older := now.Add(-time.Minute)
+	if errChtimes := os.Chtimes(filepath.Join("logs", collidingFileName), older, older); errChtimes != nil {
+		t.Fatalf("set colliding log modification time: %v", errChtimes)
+	}
 	record := cluster.AppLogRecord{
 		Timestamp: now,
 		ClientIP:  "10.0.0.5",
-		RequestID: "req-1",
+		RequestID: requestID,
 		HomeIP:    "192.0.2.10",
 		Level:     "info",
 		Line:      "line",
@@ -171,18 +301,36 @@ func TestDownloadRequestLogByIDUsesRequestIDOnlyForFileMatch(t *testing.T) {
 	engine := gin.New()
 	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-1?home_ip=192.0.2.10", nil)
-	engine.ServeHTTP(resp, req)
+	for _, tt := range []struct {
+		name      string
+		requestID string
+		status    int
+		body      string
+	}{
+		{name: "full UUID", requestID: requestID, status: http.StatusOK, body: content},
+		{name: "other full UUID with same suffix", requestID: "018f3a5b-5678-7abc-def0-99995678abcd", status: http.StatusOK, body: "another request\n"},
+		{name: "short ID selects most recently modified file", requestID: "5678abcd", status: http.StatusOK, body: content},
+		{name: "unique short ID", requestID: "f0baf00d", status: http.StatusOK, body: "unique request\n"},
+		{name: "missing short ID", requestID: "deadbeef", status: http.StatusNotFound},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/"+tt.requestID+"?home_ip=192.0.2.10", nil)
+			engine.ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
-	}
-	if got := resp.Body.String(); got != content {
-		t.Fatalf("body = %q, want %q", got, content)
-	}
-	if got := resp.Header().Get("Content-Disposition"); got == "" {
-		t.Fatal("Content-Disposition is empty")
+			if resp.Code != tt.status {
+				t.Fatalf("status = %d, want %d, body = %s", resp.Code, tt.status, resp.Body.String())
+			}
+			if tt.status != http.StatusOK {
+				return
+			}
+			if got := resp.Body.String(); got != tt.body {
+				t.Fatalf("body = %q, want %q", got, tt.body)
+			}
+			if got := resp.Header().Get("Content-Disposition"); got == "" {
+				t.Fatal("Content-Disposition is empty")
+			}
+		})
 	}
 }
 

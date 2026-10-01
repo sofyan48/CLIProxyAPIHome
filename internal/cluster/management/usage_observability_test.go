@@ -496,7 +496,6 @@ func TestGetRequestEventKeepsRemoteLogRoutableWhenHomePortDiffers(t *testing.T) 
 	handler.nodePort = 8327
 	handler.forwardTLSConfig = &tls.Config{}
 
-	requestID := "req-same-ip-port"
 	payload := `{"timestamp":"2026-06-10T01:02:05Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","request_id":"req-same-ip-port","endpoint":"/v1/chat/completions","latency_ms":100,"tokens":{"total_tokens":1}}`
 	record, errUsage := handler.repo.AppendUsageWithRuntime(context.Background(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.10", HomePort: 8328})
 	if errUsage != nil {
@@ -506,7 +505,7 @@ func TestGetRequestEventKeepsRemoteLogRoutableWhenHomePortDiffers(t *testing.T) 
 	if errMkdir := os.MkdirAll(homeLogDirectory, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll(logs) error = %v", errMkdir)
 	}
-	logPath := filepath.Join(homeLogDirectory, "20260610010205-"+requestID+".log")
+	logPath := filepath.Join(homeLogDirectory, "20260610010205-req-same-ip-port.log")
 	if errWrite := os.WriteFile(logPath, []byte("local log should not match remote port\n"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile(log) error = %v", errWrite)
 	}

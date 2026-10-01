@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
 )
 
 type pluginSyncJSONBuilder struct {

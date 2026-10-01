@@ -126,6 +126,48 @@ func TestPublicModelCatalogReportsUnknownModalitiesAndCapabilities(t *testing.T)
 	}
 }
 
+func TestPublicModelCatalogReportsProviderSpecificLimits(t *testing.T) {
+	handler, closeRepo := newUserModelTestHandler(t)
+	defer closeRepo()
+
+	const (
+		modelID      = "shared-context-model"
+		firstClient  = "shared-context-first"
+		secondClient = "shared-context-second"
+	)
+	modelRegistry := registry.GetGlobalRegistry()
+	modelRegistry.RegisterClient(firstClient, "provider-a", []*registry.ModelInfo{{
+		ID:                  modelID,
+		ContextLength:       128000,
+		MaxCompletionTokens: 16000,
+	}})
+	modelRegistry.RegisterClient(secondClient, "provider-b", []*registry.ModelInfo{{
+		ID:                  modelID,
+		ContextLength:       200000,
+		MaxCompletionTokens: 32000,
+	}})
+	t.Cleanup(func() {
+		modelRegistry.UnregisterClient(firstClient)
+		modelRegistry.UnregisterClient(secondClient)
+	})
+
+	models := indexUserModelsByID(getUserModels(t, handler.ListModels, "/models", "").Models)
+	model, ok := models[modelID]
+	if !ok {
+		t.Fatalf("%s missing from catalog", modelID)
+	}
+	if model.ContextLength != 0 || model.MaxOutputTokens != 0 {
+		t.Fatalf("shared limits = context %d output %d, want ambiguous fields omitted", model.ContextLength, model.MaxOutputTokens)
+	}
+	wantLimits := []userModelProviderLimitPayload{
+		{Provider: "provider-a", ContextLength: 128000, MaxOutputTokens: 16000},
+		{Provider: "provider-b", ContextLength: 200000, MaxOutputTokens: 32000},
+	}
+	if !reflect.DeepEqual(model.ProviderLimits, wantLimits) {
+		t.Fatalf("provider limits = %#v, want %#v", model.ProviderLimits, wantLimits)
+	}
+}
+
 func TestAccessibleModelsRequireAuthentication(t *testing.T) {
 	handler, closeRepo := newUserModelTestHandler(t)
 	defer closeRepo()
@@ -543,16 +585,23 @@ type userModelAvailabilityPayload struct {
 	LastObservedAt        string                             `json:"last_observed_at"`
 }
 
+type userModelProviderLimitPayload struct {
+	Provider        string `json:"provider"`
+	ContextLength   int    `json:"context_length"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+}
+
 type userModelPayload struct {
-	ID              string                        `json:"id"`
-	DisplayName     string                        `json:"display_name"`
-	Providers       []string                      `json:"providers"`
-	ContextLength   int                           `json:"context_length"`
-	MaxOutputTokens int                           `json:"max_output_tokens"`
-	Modalities      userModelModalitiesPayload    `json:"modalities"`
-	Capabilities    userModelCapabilitiesPayload  `json:"capabilities"`
-	Pricing         *userModelPricingPayload      `json:"pricing"`
-	Availability    *userModelAvailabilityPayload `json:"availability"`
+	ID              string                          `json:"id"`
+	DisplayName     string                          `json:"display_name"`
+	Providers       []string                        `json:"providers"`
+	ProviderLimits  []userModelProviderLimitPayload `json:"provider_limits"`
+	ContextLength   int                             `json:"context_length"`
+	MaxOutputTokens int                             `json:"max_output_tokens"`
+	Modalities      userModelModalitiesPayload      `json:"modalities"`
+	Capabilities    userModelCapabilitiesPayload    `json:"capabilities"`
+	Pricing         *userModelPricingPayload        `json:"pricing"`
+	Availability    *userModelAvailabilityPayload   `json:"availability"`
 }
 
 type userModelAccessPayload struct {

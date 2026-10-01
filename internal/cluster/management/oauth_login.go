@@ -156,7 +156,11 @@ func (h *Handler) RequestKimiToken(c *gin.Context) {
 		return
 	}
 
-	kimiAuth := kimiauth.NewKimiAuth(cfg)
+	provider, domain := "kimi", kimiauth.KimiDefaultDomain
+	if strings.EqualFold(strings.TrimSpace(c.Query("provider")), "kimi-ai") {
+		provider, domain = "kimi-ai", kimiauth.KimiAIDomain
+	}
+	kimiAuth := kimiauth.NewKimiAuth(cfg, domain)
 	deviceFlow, errDevice := kimiAuth.StartDeviceFlow(ctx)
 	if errDevice != nil {
 		log.Errorf("cluster oauth: failed to start kimi device flow: %v", errDevice)
@@ -168,7 +172,7 @@ func (h *Handler) RequestKimiToken(c *gin.Context) {
 		authURL = strings.TrimSpace(deviceFlow.VerificationURI)
 	}
 
-	if errRegister := h.registerOAuthSession(c, "kimi", state, map[string]any{
+	if errRegister := h.registerOAuthSession(c, provider, state, map[string]any{
 		"device_code": deviceFlow.DeviceCode,
 		"user_code":   deviceFlow.UserCode,
 	}); errRegister != nil {
@@ -367,7 +371,15 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	// Resolve credential context before calling upstream OAuth services.
 	var req oauthCallbackRequest
-	if errBind := c.ShouldBindJSON(&req); errBind != nil {
+	if c.Request.Method == http.MethodGet {
+		req.State = c.Query("state")
+		req.Code = c.Query("code")
+		req.Error = c.Query("error")
+		if req.Error == "" {
+			req.Error = c.Query("error_description")
+		}
+		req.Provider = c.Query("provider")
+	} else if errBind := c.ShouldBindJSON(&req); errBind != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid body"})
 		return
 	}
@@ -442,7 +454,7 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	} else {
 		provider, errProvider = normalizeOAuthProvider(providerInput)
 	}
-	if errProvider != nil || (!isPlugin && (provider == "kimi" || provider == "meta")) {
+	if errProvider != nil || (!isPlugin && (provider == "kimi" || provider == "kimi-ai" || provider == "meta")) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "unsupported provider"})
 		return
 	}
@@ -498,7 +510,7 @@ func respondOAuthSessionMergeError(c *gin.Context, errMerge error) {
 // processOAuthCallback handles a process o auth callback.
 func (h *Handler) processOAuthCallback(provider, state, code string) {
 	// Resolve credential context before calling upstream OAuth services.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := h.oauthSessionContext(context.Background(), state, 5*time.Minute)
 	defer cancel()
 
 	session, errSession := h.repo.GetOAuthSession(ctx, state)
@@ -506,7 +518,7 @@ func (h *Handler) processOAuthCallback(provider, state, code string) {
 		log.Errorf("cluster oauth: load session failed: %v", errSession)
 		return
 	}
-	if session == nil {
+	if session == nil || session.Status != "" || ctx.Err() != nil {
 		return
 	}
 	data, errData := cluster.OAuthSessionData(session)
@@ -536,15 +548,12 @@ func (h *Handler) processOAuthCallback(provider, state, code string) {
 		log.Errorf("cluster oauth: %s callback failed: %v", provider, errProcess)
 		return
 	}
-	if errComplete := h.repo.CompleteOAuthSession(ctx, state); errComplete != nil {
-		log.Errorf("cluster oauth: complete session failed: %v", errComplete)
-	}
 }
 
 // waitForKimiAuthorization returns a wait for kimi authorization.
 func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.KimiAuth, deviceFlow *kimiauth.DeviceCodeResponse) {
 	// Validate request inputs before mutating persisted state.
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
+	ctx, cancel := h.oauthSessionContext(context.Background(), state, 16*time.Minute)
 	defer cancel()
 
 	authBundle, errWait := kimiAuth.WaitForAuthorization(ctx, deviceFlow)
@@ -559,8 +568,14 @@ func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.Kimi
 	}
 
 	tokenData := authBundle.TokenData
+	provider := "kimi"
+	if authBundle.Domain == kimiauth.KimiAIDomain {
+		provider = "kimi-ai"
+	}
 	metadata := map[string]any{
-		"type":          "kimi",
+		"type":          provider,
+		"domain":        authBundle.Domain,
+		"base_url":      kimiauth.ResolveKimiAPIBaseURL(authBundle.Domain),
 		"access_token":  tokenData.AccessToken,
 		"refresh_token": tokenData.RefreshToken,
 		"token_type":    tokenData.TokenType,
@@ -574,22 +589,19 @@ func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.Kimi
 		metadata["device_id"] = deviceID
 	}
 
-	storeCtx, cancelStore := context.WithTimeout(context.Background(), 30*time.Second)
+	storeCtx, cancelStore := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelStore()
-	fileName := fmt.Sprintf("kimi-%d.json", time.Now().UnixMilli())
+	fileName := fmt.Sprintf("%s-%d.json", provider, time.Now().UnixMilli())
 	if errStore := h.storeOAuthMetadataWithContext(storeCtx, metadata, fileName); errStore != nil {
 		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Failed to save authentication tokens")
 		log.Errorf("cluster oauth: store kimi token failed: %v", errStore)
 		return
 	}
-	if errComplete := h.repo.CompleteOAuthSession(context.Background(), state); errComplete != nil {
-		log.Errorf("cluster oauth: complete kimi session failed: %v", errComplete)
-	}
 }
 
 // waitForMetaAuthorization waits for Meta device-flow authorization to complete.
 func (h *Handler) waitForMetaAuthorization(state string, metaAuth *metaauth.MetaAuth, deviceFlow *metaauth.DeviceCodeResponse) {
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
+	ctx, cancel := h.oauthSessionContext(context.Background(), state, 16*time.Minute)
 	defer cancel()
 
 	authBundle, errWait := metaAuth.WaitForAuthorization(ctx, deviceFlow)
@@ -609,16 +621,13 @@ func (h *Handler) waitForMetaAuthorization(state string, metaAuth *metaauth.Meta
 		return
 	}
 
-	storeCtx, cancelStore := context.WithTimeout(context.Background(), 30*time.Second)
+	storeCtx, cancelStore := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelStore()
 	fileName := metaauth.CredentialFileName(tokenStorage.Email, tokenStorage.DCAToken)
 	if errStore := h.storeOAuthMetadataWithContext(storeCtx, metaauth.BuildOAuthMetadata(tokenStorage), fileName); errStore != nil {
 		_ = h.repo.SetOAuthSessionError(context.Background(), state, "Failed to save authentication tokens")
 		log.Errorf("cluster oauth: store meta token failed: %v", errStore)
 		return
-	}
-	if errComplete := h.repo.CompleteOAuthSession(context.Background(), state); errComplete != nil {
-		log.Errorf("cluster oauth: complete meta session failed: %v", errComplete)
 	}
 }
 
@@ -1310,6 +1319,8 @@ func normalizeOAuthProvider(provider string) (string, error) {
 		return "antigravity", nil
 	case "kimi":
 		return "kimi", nil
+	case "kimi-ai":
+		return "kimi-ai", nil
 	case "xai", "x-ai", "x.ai", "grok":
 		return "xai", nil
 	case "devin":
@@ -1420,4 +1431,40 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// oauthSessionStateKey binds credential persistence to the session that authorized it.
+type oauthSessionStateKey struct{}
+
+// oauthSessionContext stops in-flight acquisition when another Home node cancels the session.
+// The database transaction remains the authority for credential persistence.
+func (h *Handler) oauthSessionContext(parent context.Context, state string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithValue(parent, oauthSessionStateKey{}, state), timeout)
+	session, errSession := h.repo.GetOAuthSession(ctx, state)
+	if errSession != nil || session == nil || session.Status != "" {
+		cancel()
+		return ctx, cancel
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				current, errCurrent := h.repo.GetOAuthSession(ctx, state)
+				if errCurrent != nil || current == nil || current.Status == "error" {
+					cancel()
+					return
+				}
+				if current.Status == "complete" {
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() { cancel(); <-done }
 }

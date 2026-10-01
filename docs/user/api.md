@@ -2,13 +2,15 @@
 
 This document describes the current DB-backed User API exposed by CLIProxyAPIHome. The User API is separate from the Management API and does not use the Management API secret key.
 
+The v8 upgrade changes the [Management API](../management/api.md) to `/v8/management`; the User API remains under `/user` with the same authentication and resource paths. `/user/api-keys` manages the signed-in user's client access keys. Upstream provider-key groups belong to Management API `/config/api-keys`, and administrator access-key operations use `/access/api-keys` relative to the management base.
+
 Base URL:
 
 ```text
 http://<host>:<port>/user
 ```
 
-Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `port` is distributed to CPA nodes and does not configure the Home listener.
+Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The v8 runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
 ## Runtime Model
 
@@ -46,7 +48,7 @@ Configuration rules:
 - `verification-token-ttl` and `reset-token-ttl` must be positive Go duration strings.
 - Missing or invalid settings keep the email capability disabled without preventing Home from starting.
 - `user-email` is Home-only configuration and is not forwarded to downstream CPA nodes.
-- Home ignores forwarded client-IP headers by default. When an explicit reverse proxy fronts Home, list only that proxy's exact IP addresses or CIDRs in top-level `trusted-proxies`; trust-all networks are rejected, and changes require a restart. This keeps IP-based registration and recovery limits correct without allowing direct clients to spoof their address.
+- Home ignores forwarded client-IP headers by default. When an explicit reverse proxy fronts Home, list only that proxy's exact IP addresses or CIDRs in v8 `server.trusted-proxies` (legacy `trusted-proxies`); trust-all networks are rejected, and changes require a restart. This keeps IP-based registration and recovery limits correct without allowing direct clients to spoof their address.
 - Disabling the feature keeps existing email state in the database but stops new email changes, verification requests, and recovery requests. Previously issued verify/reset tokens can still be consumed until they expire or are invalidated.
 
 ## Authentication
@@ -56,6 +58,7 @@ Public routes:
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/capabilities` | Reports optional User API capabilities. |
+| `GET` | `/models` | Returns the public model catalog. |
 | `POST` | `/register` | Creates a user and returns a bearer token. |
 | `POST` | `/login` | Password login for users without passkey and without TOTP. |
 | `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
@@ -660,6 +663,8 @@ The two routes answer different questions. `/user/models` answers "what can this
 
 Neither response includes Management API data, credential identities, node identities, routing details, price rule identifiers, price rule sources, price rule notes, or any other user's data.
 
+In v8, model metadata can also come from configured upstream group/key models: `display-name`, positive `max-context-length`, and explicit `thinking` are carried into the runtime catalog. OpenAI-compatible models can additionally specify `image`, `input-modalities`, and `output-modalities`; OAuth aliases can override `display-name`. These settings affect the existing User API response fields rather than adding a new `/v8/user` route. Credential options such as `weight` and `is-compat` are not exposed as user model fields.
+
 ### Three-state reporting
 
 Model metadata is reported as an explicit state rather than an empty value, because a model nobody described must not be presented as a model that lacks the capability:
@@ -692,6 +697,9 @@ Example response:
       "description": "Fast general purpose model.",
       "type": "chat",
       "providers": ["openai"],
+      "provider_limits": [
+        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
+      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": {
@@ -716,14 +724,15 @@ Model fields:
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | string | The literal model identifier to send in an API request. Never translated or reformatted. |
-| `display_name` | string | Optional human-readable name. Absent when the upstream never supplied one. |
+| `display_name` | string | Optional human-readable name from the runtime catalog, including configured `display-name` overrides. Omitted when the catalog has no name. |
 | `description` | string | Optional short description supplied by the upstream. |
 | `version` | string | Optional upstream version string. |
 | `owned_by` | string | Optional upstream owner. |
 | `type` | string | Optional model type, for example `chat`. |
 | `providers[]` | array | Provider identifiers that can serve this model. These are the same identifiers used on usage records and price rules. |
-| `context_length` | number | Maximum input tokens. Omitted when unknown; `context_length` and `inputTokenLimit` upstream spellings are normalized into this one field. |
-| `max_output_tokens` | number | Maximum output tokens. Omitted when unknown; normalizes `max_completion_tokens` and `outputTokenLimit`. |
+| `provider_limits[]` | array | Provider-specific token limits. Each entry contains `provider` and, when known, `context_length` and `max_output_tokens`. Positive configured `max-context-length` values are included; otherwise catalog `context_length` and `inputTokenLimit` spellings are normalized. |
+| `context_length` | number | Common maximum input tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. When no provider-specific limits are available, includes positive configured `max-context-length` or normalized catalog `context_length` and `inputTokenLimit`. |
+| `max_output_tokens` | number | Common maximum output tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. When no provider-specific limits are available, normalizes `max_completion_tokens` and `outputTokenLimit`. |
 | `modalities` | object | See below. |
 | `capabilities` | object | See below. |
 
@@ -737,7 +746,7 @@ Model fields:
 
 The published vocabulary is `text`, `image`, `audio` and `video`. Document formats are not modalities and are not reported here: several providers list PDF as an accepted input type and the rest do not describe their inputs that way, so publishing it would compare providers on a distinction only some of them make.
 
-Modalities come from the model catalog (`models.json`), which is curated by hand rather than probed from upstream. Values are taken from provider documentation, or from a first-party manifest where the provider publishes one — the Codex entries are filled from `codex_client_models.json`, which ships alongside the catalog and carries OpenAI's own `input_modalities`. A model the catalog does not describe reports `status: "unknown"` — never an empty `input` array, which a client would be entitled to read as "text only". Values are lower-cased and de-duplicated before they are returned.
+Modalities come from the runtime model registry. Built-in entries use the curated model catalog (`models.json`) and provider manifests such as `codex_client_models.json`; v8 OpenAI-compatible model definitions can publish explicit `input-modalities` and `output-modalities`. A model with no published modality metadata reports `status: "unknown"`. Values are lower-cased and de-duplicated before they are returned; clients must not infer "text only" from missing metadata.
 
 Leaving a model undescribed is a normal outcome, not a gap to be filled in later with a guess. A handful of models whose vendor documents context length and speed but never input types are expected to report `unknown` indefinitely; that is the catalog working as intended, not a backlog item.
 
@@ -752,6 +761,8 @@ Leaving a model undescribed is a normal outcome, not a gap to be filled in later
 | `structured_output.status` | string | `supported`, `unsupported`, or `unknown`. Whether the model can be constrained to a caller-supplied schema. Resolved server-side from the parameter list; clients must not re-derive it. |
 | `parameters[]` | array | Optional request parameters the model accepts. |
 | `generation_methods[]` | array | Optional upstream generation methods. |
+
+Configured thinking levels are trimmed, lowercased, and deduplicated before reaching the registry. `none` enables zero-budget support and `auto` enables dynamic-budget support. The response keeps the existing `capabilities.reasoning` shape; config keys such as `zero-allowed` / `dynamic-allowed` are not response field names.
 
 This route never includes `pricing` or `availability`. Their absence is the contract, not a missing value: an anonymous visitor is not entitled to the operator's commercial terms.
 
@@ -774,6 +785,9 @@ Example response:
       "id": "gpt-4.1-mini",
       "display_name": "GPT-4.1 mini",
       "providers": ["openai"],
+      "provider_limits": [
+        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
+      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": { "status": "known", "input": ["text", "image"], "output": ["text"] },

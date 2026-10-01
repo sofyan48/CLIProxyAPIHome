@@ -15,8 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginhost"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
+	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"

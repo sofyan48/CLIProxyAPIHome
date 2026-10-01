@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )

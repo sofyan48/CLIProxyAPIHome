@@ -145,7 +145,12 @@ func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	}
 	requestID := strings.TrimSpace(opts.RequestID)
 	if requestID != "" {
-		query = query.Where("request_id = ?", requestID)
+		if len(requestID) == 8 {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(requestID)
+			query = query.Where("request_id LIKE ? ESCAPE '!'", pattern)
+		} else {
+			query = query.Where("request_id = ?", requestID)
+		}
 	}
 	level := strings.TrimSpace(opts.Level)
 	if level != "" {

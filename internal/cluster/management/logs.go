@@ -346,11 +346,15 @@ func appLogRecordToMap(record *cluster.AppLogRecord) gin.H {
 	if record == nil {
 		return gin.H{}
 	}
+	requestID := strings.TrimSpace(record.RequestID)
+	if len(requestID) > 8 {
+		requestID = requestID[len(requestID)-8:]
+	}
 	return gin.H{
 		"id":         record.ID,
 		"timestamp":  record.Timestamp,
 		"client_ip":  record.ClientIP,
-		"request_id": record.RequestID,
+		"request_id": requestID,
 		"home_ip":    record.HomeIP,
 		"level":      record.Level,
 		"line":       record.Line,
@@ -421,7 +425,8 @@ func findRequestLogFile(dir string, requestID string) (string, string, error) {
 		return "", "", errRead
 	}
 
-	suffix := "-" + requestID + ".log"
+	requestID = strings.TrimSpace(requestID)
+	suffix := requestID + ".log"
 	candidates := make([]requestLogCandidate, 0, 1)
 	for _, entry := range entries {
 		if entry.IsDir() {

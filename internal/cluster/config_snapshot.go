@@ -141,7 +141,12 @@ func ConfigRootFromSnapshot(snapshot map[string]json.RawMessage) (map[string]any
 
 // RuntimeConfigFromRoot derives runtime config from root.
 func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, error) {
-	// Normalize source data before building the derived payload.
+	// Normalize before inspecting roots, including v8 imports and snapshots.
+	var errNormalize error
+	root, errNormalize = appconfig.NormalizeConfigRoot(root)
+	if errNormalize != nil {
+		return nil, nil, errNormalize
+	}
 	if _, exists := root["port"]; !exists {
 		rootWithDefaultPort := make(map[string]any, len(root)+1)
 		for key, value := range root {
@@ -282,4 +287,63 @@ func isClusterCredentialConfigKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// MutateConfigSnapshot applies a management edit to the current database view in one transaction.
+// The callback must only transform its input; network and runtime reloads happen after commit.
+func (r *Repository) MutateConfigSnapshot(ctx context.Context, nodeHeartbeatTimeout time.Duration, mutate func(map[string]any) (map[string]any, error)) error {
+	if mutate == nil {
+		return fmt.Errorf("config mutation callback is nil")
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	ctx = contextOrBackground(ctx)
+	return withConcurrencyTransaction(ctx, db, func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
+		gate, errGate := lockConcurrencyActivationGate(tx)
+		if errGate != nil {
+			return errGate
+		}
+		// SQLite's activation-gate insert already holds the write lock. PostgreSQL
+		// also needs to serialize legacy config upserts, including newly added roots.
+		if tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			if errLock := tx.Exec("LOCK TABLE config IN SHARE ROW EXCLUSIVE MODE").Error; errLock != nil {
+				return errLock
+			}
+		}
+		lifecycle, errLifecycle := ensureLifecycleConfigTx(tx, nodeHeartbeatTimeout)
+		if errLifecycle != nil {
+			return errLifecycle
+		}
+		if errLock := r.lockAllProviderAuthsForReconciliationTx(ctx, tx); errLock != nil {
+			return errLock
+		}
+		txRepo := NewRepository(tx)
+		snapshot, errSnapshot := txRepo.LoadConfigSnapshot(ctx)
+		if errSnapshot != nil {
+			return errSnapshot
+		}
+		root, errRoot := ConfigRootFromSnapshot(snapshot)
+		if errRoot != nil {
+			return errRoot
+		}
+		root["credential-concurrency"], errRoot = lifecycleConfigFromRecord(lifecycle)
+		if errRoot != nil {
+			return errRoot
+		}
+		auths, errAuths := txRepo.ListAuths(ctx)
+		if errAuths != nil {
+			return errAuths
+		}
+		ApplyCredentialConfigToRoot(root, auths)
+		values, errMutate := mutate(root)
+		if errMutate != nil {
+			return errMutate
+		}
+		return r.replaceConfigSnapshotWithLockedActivationGateTx(ctx, tx, nodeHeartbeatTimeout, gate, values)
+	})
 }

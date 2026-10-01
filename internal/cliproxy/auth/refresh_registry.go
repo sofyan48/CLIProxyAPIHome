@@ -19,6 +19,7 @@ func init() {
 	registerRefreshLead("gemini", nil)
 	registerRefreshLead("antigravity", &antigravityRefreshLead)
 	registerRefreshLead("kimi", &kimiRefreshLead)
+	registerRefreshLead("kimi-ai", &kimiRefreshLead)
 	registerRefreshLead("xai", &xaiRefreshLead)
 	registerRefreshLead("meta", nil)
 }

@@ -619,6 +619,11 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 	if auth == nil {
 		return item
 	}
+	if options, ok := auth.Metadata["credential_options"].(map[string]any); ok {
+		for field, value := range options {
+			item[field] = value
+		}
+	}
 	attrs := auth.Attributes
 	if attrs == nil {
 		attrs = map[string]string{}
@@ -660,6 +665,10 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 				"api-key":   attrs["api_key"],
 				"proxy-url": auth.ProxyURL,
 			}}
+			if weight, exists := item["weight"]; exists {
+				item["api-key-entries"].([]map[string]any)[0]["weight"] = weight
+				delete(item, "weight")
+			}
 		}
 	}
 	if (key == "codex-api-key" || key == "xai-api-key" || key == "meta-api-key") && strings.EqualFold(attrs["websockets"], "true") {
@@ -680,7 +689,7 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 	switch key {
 	case "codex-api-key", "xai-api-key", "meta-api-key", "gemini-api-key", "interactions-api-key", "vertex-api-key", "claude-api-key":
 		models := credentialAPIKeyModels(auth)
-		if len(models) > 0 {
+		if len(models) > 0 && item["models"] == nil {
 			item["models"] = models
 		}
 	}

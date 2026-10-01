@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 )

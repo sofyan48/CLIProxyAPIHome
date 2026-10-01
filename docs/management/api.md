@@ -5,7 +5,7 @@ This document describes the current DB-backed Management API exposed by CLIProxy
 Base URL:
 
 ```text
-http://<host>:<port>/v0/management
+http://<host>:<port>/v8/management
 ```
 
 Optional management panel:
@@ -20,7 +20,20 @@ GET /assets/*
 
 The panel assets are embedded into the binary at build time.
 
-Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `port` is distributed to CPA nodes and does not configure the Home listener.
+Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
+
+## API Versions
+
+This reference uses the v8 Management API. `/v0/management` remains available for existing clients; it shares Home's database and runtime with v8. The v8 API is not a prefix-only rename: configuration bodies and several resource paths changed. See the v0 migration appendix for the old mutation contracts.
+
+| Interface | Base path | Contract |
+| --- | --- | --- |
+| Management API | `/v8/management` | Configuration tree plus Home management resources. |
+| Legacy Management API | `/v0/management` | Existing flat config and provider-specific routes. |
+| User API | `/user` | Unchanged base path and user-token authentication; see [User API](../user/api.md). |
+| Plugin assets | `/v0/resource/plugins/...` | Asset URLs returned by Home keep their existing path. |
+
+The v8 configuration format declares `config-version: 8`. This is independent of Home's release tag and does not version the User API or the RESP protocol. The field reference below uses v8 YAML/JSON key paths; replace dots with slashes to address a config subtree through HTTP.
 
 ## Runtime Model
 
@@ -30,7 +43,7 @@ The route list below is the database-backed route set registered by `cmd/home` t
 
 ## Authentication
 
-Every `/v0/management/*` route requires a management key.
+Management routes under `/v8/management/*` and `/v0/management/*` require a management key. The exception is `GET/POST /v8/management/oauth/callback`: it validates a pending OAuth `state` without the management-key middleware. Availability checks still apply, so a disabled Management API also disables the v8 callback.
 
 Supported request headers:
 
@@ -44,8 +57,8 @@ Access rules:
 | Rule | Behavior |
 | --- | --- |
 | Local requests | Still require a valid management key. |
-| Remote requests | Require remote management to be enabled, such as `remote-management.allow-remote: true`, or an internal override. |
-| API disabled | If neither `remote-management.secret-key` nor `MANAGEMENT_PASSWORD` is set, Management API routes normally return `404`. |
+| Remote requests | Require remote management to be enabled, such as `management.allow-remote: true`, or an internal override. |
+| API disabled | If neither `management.secret-key` nor `MANAGEMENT_PASSWORD` is set, Management API routes normally return `404`. |
 | Failed-auth ban | The same client IP is banned for 30 minutes after 5 consecutive failed attempts. During the ban, a correct key still fails. |
 
 Common auth errors:
@@ -75,10 +88,10 @@ Most successful write operations return:
 { "status": "ok" }
 ```
 
-Full config replacement returns:
+v8 config writes return:
 
 ```json
-{ "ok": true, "changed": ["config"] }
+{ "status": "ok", "config-version": 8 }
 ```
 
 DB-backed handlers usually return both a machine-readable `error` code and a human-readable `message`:
@@ -96,69 +109,31 @@ Other common error shapes:
 
 ## Registered Routes
 
-The table below is extracted from the final Home route registry built by `internal/managementhttp/server.go` for `cmd/home`.
+The following v8 routes are derived from `internal/managementhttp/routes_v8.go` and the OAuth callback registration in `server.go`. All paths in this reference are relative to `/v8/management` unless explicitly qualified. `*path` is a slash-separated configuration key path. OAuth callbacks are the authentication exception described above.
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/anthropic-auth-url` |
-| `DELETE` | `/antigravity` |
-| `GET` | `/antigravity` |
-| `PATCH` | `/antigravity` |
-| `PUT` | `/antigravity` |
-| `GET` | `/antigravity-auth-url` |
-| `POST` | `/api-call` |
-| `GET` | `/api-key-usage` |
-| `GET` | `/capabilities` |
-| `GET` | `/quota/credentials` |
-| `GET` | `/quota/credentials/:credential_id` |
-| `POST` | `/quota/credentials/:credential_id/reset-credits/consume` |
-| `POST` | `/quota/collect` |
-| `DELETE` | `/api-keys` |
-| `GET` | `/api-keys` |
-| `PATCH` | `/api-keys` |
-| `POST` | `/api-keys` |
-| `PUT` | `/api-keys` |
-| `GET` | `/billing/overview` |
-| `GET` | `/billing/charges` |
+| `DELETE` | `/access/api-keys` |
+| `GET` | `/access/api-keys` |
+| `PATCH` | `/access/api-keys` |
+| `POST` | `/access/api-keys` |
+| `PUT` | `/access/api-keys` |
 | `GET` | `/billing/balance-records` |
-| `POST` | `/billing/balance-records/recharge` |
 | `POST` | `/billing/balance-records/deduct` |
+| `POST` | `/billing/balance-records/recharge` |
+| `GET` | `/billing/charges` |
 | `GET` | `/billing/model-prices` |
 | `POST` | `/billing/model-prices` |
-| `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
-| `POST` | `/billing/model-prices/import/preview` |
+| `PATCH` | `/billing/model-prices/:id` |
 | `POST` | `/billing/model-prices/import/apply` |
 | `GET` | `/billing/model-prices/import/operations/:id` |
+| `POST` | `/billing/model-prices/import/preview` |
+| `GET` | `/billing/overview` |
 | `GET` | `/billing/settings` |
 | `PATCH` | `/billing/settings` |
 | `GET` | `/billing/settings/diagnostics` |
-| `GET` | `/usage/overview` |
-| `GET` | `/usage/records` |
-| `GET` | `/usage/records/:id` |
-| `GET` | `/usage/session-tree` |
-| `GET` | `/usage/aggregates` |
-| `GET` | `/usage/export` |
-| `GET` | `/usage/realtime` |
-| `GET` | `/usage/health/providers` |
-| `GET` | `/usage/health/credentials` |
-| `GET` | `/request-events` |
-| `GET` | `/request-events/export` |
-| `GET` | `/request-events/filter-options` |
-| `GET` | `/request-events/:id` |
-| `GET` | `/request-logs` |
-| `GET` | `/proxy/proxy-pools` |
-| `POST` | `/proxy/proxy-pools` |
-| `PATCH` | `/proxy/proxy-pools/:id` |
-| `DELETE` | `/proxy/proxy-pools/:id` |
-| `POST` | `/proxy/proxy-pools/:id/test` |
-| `DELETE` | `/auth-files` |
-| `GET` | `/auth-files` |
-| `POST` | `/auth-files` |
-| `GET` | `/auth-files/download` |
-| `PATCH` | `/auth-files/fields` |
-| `GET` | `/auth-files/models` |
-| `PATCH` | `/auth-files/status` |
+| `GET` | `/capabilities` |
 | `POST` | `/certificates/clients` |
 | `GET` | `/channel-group-details` |
 | `POST` | `/channel-group-details` |
@@ -172,66 +147,33 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/channel-groups/:id` |
 | `PATCH` | `/channel-groups/:id` |
 | `PUT` | `/channel-groups/:id` |
-| `DELETE` | `/claude-api-key` |
-| `GET` | `/claude-api-key` |
-| `PATCH` | `/claude-api-key` |
-| `PUT` | `/claude-api-key` |
-| `DELETE` | `/codex-api-key` |
-| `GET` | `/codex-api-key` |
-| `PATCH` | `/codex-api-key` |
-| `PUT` | `/codex-api-key` |
-| `GET` | `/codex-auth-url` |
 | `GET` | `/config` |
-| `GET` | `/credentials/in-flight` |
-| `GET` | `/credentials/in-flight/summary` |
-| `GET` | `/credentials/concurrency-policies` |
-| `GET` | `/credentials/concurrency` |
+| `PATCH` | `/config` |
+| `PUT` | `/config` |
+| `GET` | `/config.yaml` |
+| `PUT` | `/config.yaml` |
+| `DELETE` | `/config/*path` |
+| `GET` | `/config/*path` |
+| `PATCH` | `/config/*path` |
+| `PUT` | `/config/*path` |
+| `DELETE` | `/credentials` |
+| `GET` | `/credentials` |
+| `POST` | `/credentials` |
 | `GET` | `/credentials/:credential_id/concurrency-policy` |
 | `PATCH` | `/credentials/:credential_id/concurrency-policy` |
 | `DELETE` | `/credentials/:credential_id/cooldown` |
-| `GET` | `/config.yaml` |
-| `PUT` | `/config.yaml` |
-| `GET` | `/debug` |
-| `PATCH` | `/debug` |
-| `PUT` | `/debug` |
-| `GET` | `/devin-auth-url` |
-| `GET` | `/error-logs-max-files` |
-| `PATCH` | `/error-logs-max-files` |
-| `PUT` | `/error-logs-max-files` |
-| `GET` | `/force-model-prefix` |
-| `PATCH` | `/force-model-prefix` |
-| `PUT` | `/force-model-prefix` |
-| `DELETE` | `/gemini-api-key` |
-| `GET` | `/gemini-api-key` |
-| `PATCH` | `/gemini-api-key` |
-| `PUT` | `/gemini-api-key` |
-| `GET` | `/get-auth-status` |
-| `DELETE` | `/interactions-api-key` |
-| `GET` | `/interactions-api-key` |
-| `PATCH` | `/interactions-api-key` |
-| `PUT` | `/interactions-api-key` |
-| `GET` | `/kimi-auth-url` |
-| `GET` | `/latest-version` |
-| `GET` | `/logging-to-file` |
-| `PATCH` | `/logging-to-file` |
-| `PUT` | `/logging-to-file` |
-| `DELETE` | `/logs` |
-| `GET` | `/logs` |
-| `GET` | `/logs-max-total-size-mb` |
-| `PATCH` | `/logs-max-total-size-mb` |
-| `PUT` | `/logs-max-total-size-mb` |
-| `GET` | `/max-retry-credentials` |
-| `PATCH` | `/max-retry-credentials` |
-| `PUT` | `/max-retry-credentials` |
-| `GET` | `/max-retry-interval` |
-| `PATCH` | `/max-retry-interval` |
-| `PUT` | `/max-retry-interval` |
-| `DELETE` | `/meta-api-key` |
-| `GET` | `/meta-api-key` |
-| `PATCH` | `/meta-api-key` |
-| `PUT` | `/meta-api-key` |
-| `GET` | `/meta-auth-url` |
-| `GET` | `/model-definitions/:channel` |
+| `GET` | `/credentials/concurrency` |
+| `GET` | `/credentials/concurrency-policies` |
+| `GET` | `/credentials/download` |
+| `PATCH` | `/credentials/fields` |
+| `GET` | `/credentials/in-flight` |
+| `GET` | `/credentials/in-flight/summary` |
+| `GET` | `/credentials/models` |
+| `POST` | `/credentials/quota/fetch` |
+| `GET` | `/credentials/quota/providers` |
+| `POST` | `/credentials/quota/reset` |
+| `POST` | `/credentials/refresh` |
+| `PATCH` | `/credentials/status` |
 | `GET` | `/model-group-details` |
 | `POST` | `/model-group-details` |
 | `DELETE` | `/model-group-details/:id` |
@@ -247,185 +189,194 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/models` |
 | `GET` | `/nodes` |
 | `PATCH` | `/nodes/:node_id` |
-| `POST` | `/oauth-callback` |
-| `DELETE` | `/oauth-excluded-models` |
-| `GET` | `/oauth-excluded-models` |
-| `PATCH` | `/oauth-excluded-models` |
-| `PUT` | `/oauth-excluded-models` |
-| `DELETE` | `/oauth-model-alias` |
-| `GET` | `/oauth-model-alias` |
-| `PATCH` | `/oauth-model-alias` |
-| `PUT` | `/oauth-model-alias` |
-| `DELETE` | `/openai-compatibility` |
-| `GET` | `/openai-compatibility` |
-| `PATCH` | `/openai-compatibility` |
-| `PUT` | `/openai-compatibility` |
-| `DELETE` | `/payload` |
-| `GET` | `/payload` |
-| `PATCH` | `/payload` |
-| `PUT` | `/payload` |
-| `GET` | `/plugins` |
-| `GET` | `/plugin-store` |
-| `POST` | `/plugin-store/:id/install` |
-| `POST` | `/plugin-store/:id/uninstall` |
+| `GET` | `/oauth/auth-url` |
+| `GET` | `/oauth/callback` |
+| `POST` | `/oauth/callback` |
+| `POST` | `/oauth/import` |
+| `DELETE` | `/oauth/session` |
+| `GET` | `/oauth/status` |
+| `DELETE` | `/observability/logs` |
+| `GET` | `/observability/logs` |
+| `GET` | `/observability/logs/errors` |
+| `GET` | `/observability/logs/errors/:name` |
+| `GET` | `/observability/logs/requests/:id` |
+| `GET` | `/observability/usage/api-keys` |
+| `GET` | `/observability/usage/queue` |
 | `GET` | `/plugin-store-auth` |
 | `POST` | `/plugin-store-auth` |
+| `DELETE` | `/plugin-store-auth/:id` |
 | `GET` | `/plugin-store-auth/:id` |
 | `PATCH` | `/plugin-store-auth/:id` |
-| `DELETE` | `/plugin-store-auth/:id` |
-| `GET` | `/port` |
-| `PATCH` | `/port` |
-| `PUT` | `/port` |
-| `DELETE` | `/proxy-url` |
-| `GET` | `/proxy-url` |
-| `PATCH` | `/proxy-url` |
-| `PUT` | `/proxy-url` |
-| `GET` | `/quota-exceeded/switch-preview-model` |
-| `PATCH` | `/quota-exceeded/switch-preview-model` |
-| `PUT` | `/quota-exceeded/switch-preview-model` |
-| `GET` | `/quota-exceeded/switch-project` |
-| `PATCH` | `/quota-exceeded/switch-project` |
-| `PUT` | `/quota-exceeded/switch-project` |
-| `GET` | `/request-error-logs` |
-| `GET` | `/request-error-logs/:name` |
-| `GET` | `/request-log` |
-| `PATCH` | `/request-log` |
-| `PUT` | `/request-log` |
-| `GET` | `/request-log-by-id/:id` |
-| `GET` | `/request-retry` |
-| `PATCH` | `/request-retry` |
-| `PUT` | `/request-retry` |
-| `GET` | `/routing/strategy` |
-| `PATCH` | `/routing/strategy` |
-| `PUT` | `/routing/strategy` |
+| `GET` | `/plugins` |
+| `DELETE` | `/plugins/:id` |
+| `DELETE` | `/plugins/:id/quota` |
+| `GET` | `/plugins/:id/quota` |
+| `POST` | `/plugins/:id/quota` |
+| `GET` | `/plugins/store` |
+| `POST` | `/plugins/store/:id/install` |
+| `POST` | `/plugins/store/:id/uninstall` |
+| `GET` | `/proxy/proxy-pools` |
+| `POST` | `/proxy/proxy-pools` |
+| `DELETE` | `/proxy/proxy-pools/:id` |
+| `PATCH` | `/proxy/proxy-pools/:id` |
+| `POST` | `/proxy/proxy-pools/:id/test` |
+| `POST` | `/quota/collect` |
+| `GET` | `/quota/credentials` |
+| `GET` | `/quota/credentials/:credential_id` |
+| `GET` | `/request-events` |
+| `GET` | `/request-events/:id` |
+| `GET` | `/request-events/export` |
+| `GET` | `/request-events/filter-options` |
+| `GET` | `/request-logs` |
+| `POST` | `/requests/api-call` |
+| `POST` | `/routing/cooldown/reset` |
+| `GET` | `/routing/model-definitions/:channel` |
+| `GET` | `/server/latest-version` |
 | `GET` | `/topology` |
-| `GET` | `/usage-queue` |
-| `GET` | `/usage-statistics-enabled` |
-| `PATCH` | `/usage-statistics-enabled` |
-| `PUT` | `/usage-statistics-enabled` |
+| `GET` | `/usage/aggregates` |
+| `GET` | `/usage/export` |
+| `GET` | `/usage/health/credentials` |
+| `GET` | `/usage/health/providers` |
+| `GET` | `/usage/overview` |
+| `GET` | `/usage/realtime` |
+| `GET` | `/usage/records` |
+| `GET` | `/usage/records/:id` |
+| `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
 | `DELETE` | `/users/:id` |
-| `GET` | `/users/:id/period-limits` |
-| `POST` | `/users/:id/period-limits/reset` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
-| `DELETE` | `/vertex-api-key` |
-| `GET` | `/vertex-api-key` |
-| `PATCH` | `/vertex-api-key` |
-| `PUT` | `/vertex-api-key` |
-| `POST` | `/vertex/import` |
-| `DELETE` | `/xai-api-key` |
-| `GET` | `/xai-api-key` |
-| `PATCH` | `/xai-api-key` |
-| `PUT` | `/xai-api-key` |
-| `GET` | `/xai-auth-url` |
+| `GET` | `/users/:id/period-limits` |
+| `POST` | `/users/:id/period-limits/reset` |
 
-## Config APIs
+## Configuration Endpoints
 
 ### GET `/config`
 
-Returns the current runtime config as JSON.
+Returns the normalized v8 view of persisted Home configuration and DB-backed upstream API-key credentials, with `config-version: 8`. This is a persisted configuration view, not a dump of every effective runtime default. Optional absent fields can be omitted. Reads set `Cache-Control: no-store`.
 
-Input: none.
-
-Example response:
+Example response excerpt:
 
 ```json
 {
-  "proxy-url": "http://127.0.0.1:7890",
-  "disable-image-generation": false,
-  "force-model-prefix": false,
-  "request-log": false,
-  "api-keys": ["client-key"],
-  "passthrough-headers": false,
-  "streaming": {
-    "keepalive-seconds": 0,
-    "bootstrap-retries": 0
-  },
-  "nonstream-keepalive-interval": 0,
-  "tls": {
-    "enable": false,
-    "cert": "",
-    "key": ""
-  },
-  "debug": false,
-  "pprof": {
-    "enable": false,
-    "addr": "127.0.0.1:8316"
-  },
-  "commercial-mode": false,
-  "logging-to-file": false,
-  "logs-max-total-size-mb": 0,
-  "error-logs-max-files": 10,
-  "usage-statistics-enabled": false,
-  "redis-usage-queue-retention-seconds": 60,
-  "disable-cooling": false,
-  "auth-auto-refresh-workers": 0,
-  "request-retry": 0,
-  "max-retry-credentials": 0,
-  "max-retry-interval": 0,
-  "quota-exceeded": {
-    "switch-project": false,
-    "switch-preview-model": false,
-    "antigravity-credits": false
-  },
+  "config-version": 8,
+  "server": { "port": 8317, "trusted-proxies": [] },
   "routing": {
-    "strategy": "round-robin",
-    "claude-code-session-affinity": false,
-    "session-affinity": false,
-    "session-affinity-ttl": "1h"
+    "strategy": "weighted-round-robin",
+    "retry": { "request-retry": 3, "max-retry-credentials": 0, "max-retry-interval": 30 },
+    "cooldown": { "disable-cooling": false }
   },
-  "antigravity-signature-cache-enabled": true,
-  "antigravity-signature-bypass-strict": false,
-  "antigravity": {
-    "sensitive-words": ["word"]
-  },
-  "gemini-api-key": [],
-  "interactions-api-key": [],
-  "codex-api-key": [],
-  "xai-api-key": [],
-  "meta-api-key": [],
-  "codex-header-defaults": {
-    "user-agent": "",
-    "beta-features": ""
-  },
-  "claude-api-key": [],
-  "claude-header-defaults": {
-    "user-agent": "",
-    "package-version": "",
-    "runtime-version": "",
-    "os": "",
-    "arch": "",
-    "timeout": "",
-    "stabilize-device-profile": true
-  },
-  "openai-compatibility": [],
-  "vertex-api-key": [],
-  "oauth-excluded-models": {
-    "claude": ["model-id"]
-  },
-  "oauth-model-alias": {
-    "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
-    ]
-  },
-  "payload": {
-    "default": [],
-    "default-raw": [],
-    "override": [],
-    "override-raw": [],
-    "filter": []
-  }
+  "requests": { "proxy-url": "", "payload": { "filter": [] } },
+  "oauth": { "providers": { "aistudio": { "ws-auth": false } } },
+  "observability": { "usage": { "usage-statistics-enabled": true } }
 }
 ```
 
-Fields with `json:"-"` are not returned. Home hides `host`, `port`, `allow-host`, `remote-management`, and `auth-dir` from this JSON response.
+Unlike the v0 runtime JSON response, the v8 tree can include `server`, `management`, and upstream key material. Only the `username` and `credential` fields inside `oauth.providers.codex.live-media-relay.ice-servers[]` are explicitly redacted from JSON reads, including subtree reads. This endpoint is not a general secret-redaction API. The YAML endpoint includes those TURN secrets.
+
+### GET/PUT/PATCH/DELETE `/config/*path`
+
+`*path` consists of mapping keys separated by `/`, for example `/config/routing/retry/request-retry`. It does not address array indexes: `/config/api-keys/codex/0` cannot edit one group. Read and replace the complete provider list instead.
+
+| Method | Body | Behavior |
+| --- | --- | --- |
+| `GET` | None | Returns the selected value directly: object, array, number, boolean, string, or `null`. Missing paths return `404 {"error":"not_found"}`. |
+| `PUT` | Raw JSON value | Replaces the selected subtree or leaf; omitted children are removed. Missing mapping ancestors can be created. |
+| `PATCH` | Raw JSON value | Recursively merges objects; arrays and scalars replace the previous value. Omitted siblings are preserved. `null` is retained and does not delete the field. |
+| `DELETE` | None | Removes the selected field and prunes empty ancestors. Missing paths return `404`. Deleting the complete config is not supported. |
+
+Send the value itself, without v0 wrappers such as `{"value":...}`, `{"items":...}`, or a repeated root name. `null` supports inheritance only on fields that allow it; the resulting whole document must still pass schema validation. Use `DELETE` for removal.
+
+Examples (management authentication is required on each request):
+
+```http
+PUT /v8/management/config/routing/retry/request-retry
+Authorization: Bearer <MANAGEMENT_KEY>
+Content-Type: application/json
+
+0
+```
+
+```http
+PATCH /v8/management/config/routing
+Authorization: Bearer <MANAGEMENT_KEY>
+Content-Type: application/json
+
+{"strategy":"weighted-round-robin","retry":{"max-retry-credentials":2}}
+```
+
+```http
+DELETE /v8/management/config/oauth/excluded-models/claude
+Authorization: Bearer <MANAGEMENT_KEY>
+```
+
+Successful config writes return:
+
+```json
+{ "status": "ok", "config-version": 8 }
+```
+
+### PUT/PATCH `/config`
+
+The body must be a JSON object using the v8 layout. `PATCH` updates only submitted fields. `PUT` replaces the full configuration, including the represented upstream credential families: a previously present family omitted from a full replacement is cleared. Prefer a subtree write for a limited change. For full replacement, first read the current document and preserve Home-owned revision fields.
+
+Each mutation reads the authoritative DB view and applies the edit in one transaction. Configuration, lifecycle settings, and changed provider credentials are reconciled atomically, then Home reloads configuration and, when needed, credentials. Unchanged credentials keep their IDs, runtime cooldown state, and refresh diagnostics. Home may normalize group names and split native-provider groups during readback; group position/name is not a credential identity. Preserve each key's returned `id` when editing.
+
+`access.api-keys` is a string-list projection of the live client-key table. Replacing `/config/access/api-keys` creates/restores supplied keys and soft-deletes active keys omitted from the list; retained keys keep their existing ownership and policy metadata. Removing this setting, or omitting it from a full config replacement, clears the active client-key list. Use `/access/api-keys` for rich records with IDs, ownership, channel/model groups, and limits; `/user/api-keys` manages the signed-in user's keys. This client-key list is separate from upstream provider groups at `/config/api-keys`.
+
+### GET/PUT `/config.yaml`
+
+`GET` returns the same persisted v8 tree as YAML with content type `application/yaml; charset=utf-8` and `Cache-Control: no-store`. It reconstructs configuration from the database; original comments, formatting, and grouping are not preserved.
+
+`PUT` accepts a complete v8 YAML mapping and uses the same full-replacement, validation, credential reconciliation, and read-only-field rules as `PUT /config`. `PATCH /config.yaml` is not registered. v8 writes reject legacy/mixed-layout input even though startup/import parsing supports legacy and mixed files. Read `/config.yaml` from v8 to obtain a migrated document before replacing it.
+
+JSON writes preserve omitted TURN `username`/`credential` values only when the new ICE-server entry has the same ordered `urls` list as a previous entry. Explicit `""` or `null` clears a secret. Changed URLs do not inherit another server's secrets. YAML replacement does not restore omitted TURN secrets.
+
+### Validation and Home-owned Settings
+
+| Status | Error | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_json`, `invalid_body`, `config_must_be_object` | Malformed request or a non-object full config. |
+| `400` | `invalid_path`, `cannot_delete_config` | Unsupported traversal or attempt to delete the config root. |
+| `400` | `invalid_config` | Unknown/legacy fields, unsupported version/provider, wrong types, invalid groups, or invalid weights. A supplied `config-version` must be integer `8`. |
+| `400` | `read_only_field` | A Home-owned revision was changed or removed; `field` contains its slash-separated path. |
+| `404` | `not_found` | Selected config field does not exist. |
+| `409` | `credential_identity_conflict` | Credential identity conflicts with persisted state. |
+| `422` | `invalid_config`, `invalid_credential` | Runtime config or credential reconciliation validation failed. |
+| `500` | `config_load_failed`, `auth_load_failed`, `write_failed`, `reload_failed` | Database/load/write/reload failure. A reload error can occur after commit; reread state before retrying. |
+
+The read-only paths are `credentials/concurrency/lifecycle-config-revision`, `credentials/concurrency/observation-barrier-revision`, and `plugins/auth-revision`. Preserve their current presence and value when replacing a containing object. Setting or removing them directly is rejected.
+
+Home normalizes `observability.usage.usage-statistics-enabled` to `true` and `oauth.providers.aistudio.ws-auth` to `false`. `routing.cooldown.disable-cooling` remains Home's local scheduling policy; downstream CPA configuration independently forces local CPA cooling off. `server.port` configures CPA, and running CPA processes need a restart to rebind; Home's listener still uses `-addr` or `cluster.yaml` / `node.port`. `oauth.auth-dir` remains an import/export path, not a runtime file-write destination.
+
+### Payload and OAuth Provider Subtrees
+
+Use `/config/requests/payload` for payload rules and `/config/oauth/providers/antigravity` for Antigravity OAuth options. Both follow the tree rules above, including raw responses, recursive object patching, whole-list replacement, and retained `null` values.
+
+Example `PUT /config/requests/payload/filter` body:
+
+```json
+[
+  {
+    "models": [{ "name": "*", "protocol": "responses" }],
+    "params": ["metadata.debug"]
+  }
+]
+```
+
+Example `PATCH /config/oauth/providers/antigravity` body:
+
+```json
+{ "sensitive-words": ["API", "proxy"], "connection-pool": { "enabled": true } }
+```
+
+Settings under `oauth.providers` are OAuth-scoped. API-key credentials use their own group/key options; the v8 OAuth provider settings do not implicitly configure API-key credentials.
 
 #### Credential concurrency lifecycle fields
 
-The `credential-concurrency` object is included in both config responses. Home owns `lifecycle-config-revision` and `observation-barrier-revision`: clients may send them, but Home derives both values from singleton records. The observation barrier starts at `0`, increases monotonically when policies change, and Home publishes its current value. Neither revision can be changed through YAML import or Management API updates.
+The `credentials.concurrency` object is included in both config responses. Home owns `lifecycle-config-revision` and `observation-barrier-revision`: clients must preserve their current values when replacing this subtree or the full config; Home derives both values from singleton records. The observation barrier starts at `0`, increases monotonically when policies change, and Home publishes its current value. Neither revision can be changed through YAML import or Management API updates.
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -437,169 +388,6 @@ The `credential-concurrency` object is included in both config responses. Home o
 | `cleanup-interval` | `5s` | Lifecycle cleanup interval. |
 
 All durations must be positive. Home also requires `node.heartbeat-timeout + reclaim-grace > cpa-heartbeat-timeout + cpa-cancel-bound`, rejecting duration-sum overflow as invalid. While any CPA membership is `active` or `canceling`, changes to `cpa-heartbeat-timeout`, `cpa-cancel-bound`, `reclaim-grace`, or `cleanup-interval` are rejected with `lifecycle configuration is in use`. An identical configuration is accepted as unchanged, and non-safety tuning fields may still be updated.
-
-### GET `/config.yaml`
-
-Returns the current YAML config.
-
-Input: none.
-
-Response content type:
-
-```text
-application/yaml; charset=utf-8
-```
-
-The response is reconstructed from the persisted config snapshot, so original YAML comments and formatting are not preserved.
-
-### PUT `/config.yaml`
-
-Replaces the full config.
-
-Input: a complete YAML document in the request body.
-
-Home persists non-credential roots into the config snapshot. Credential roots included in the uploaded YAML are synchronized into DB-backed auth records, while omitted credential roots are left unchanged. Send an empty list for a credential root to clear the corresponding provider-key records:
-
-```text
-auth-dir
-gemini-api-key
-interactions-api-key
-vertex-api-key
-codex-api-key
-xai-api-key
-meta-api-key
-claude-api-key
-openai-compatibility
-```
-
-`auth-dir` is still treated as an import/export path and is not persisted into the runtime config snapshot.
-
-A supplied `credential-concurrency` object updates the Home-owned lifecycle configuration. If it changes `cpa-heartbeat-timeout`, `cpa-cancel-bound`, `reclaim-grace`, or `cleanup-interval`, no CPA membership may be `active` or `canceling`; identical configurations and non-safety tuning changes remain allowed. Lifecycle, credential reconciliation, config snapshot replacement, and plugin task creation (when applicable) are committed atomically; any failure rolls all of them back.
-
-Example response:
-
-```json
-{ "ok": true, "changed": ["config", "auth"] }
-```
-
-### Simple Config Leaf Routes
-
-These routes write the corresponding config root into the cluster repository and reload the Home runtime.
-
-Port changes require a CPA restart: `PUT/PATCH /port` persists and distributes the new value immediately, but an already running CPA does not rebind its listener until that CPA process is restarted.
-
-| Method | Path | Input | Output |
-| --- | --- | --- | --- |
-| `GET` | `/port` | none | `{ "port": number }` |
-| `PUT/PATCH` | `/port` | `{ "value": number }`; must be an integer from `1` to `65535`. | `{ "status": "ok" }` |
-| `GET` | `/debug` | none | `{ "debug": boolean }` |
-| `PUT/PATCH` | `/debug` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/logging-to-file` | none | `{ "logging-to-file": boolean }` |
-| `PUT/PATCH` | `/logging-to-file` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/logs-max-total-size-mb` | none | `{ "logs-max-total-size-mb": number }` |
-| `PUT/PATCH` | `/logs-max-total-size-mb` | `{ "value": number }`; negative values are saved as `0` | `{ "status": "ok" }` |
-| `GET` | `/error-logs-max-files` | none | `{ "error-logs-max-files": number }` |
-| `PUT/PATCH` | `/error-logs-max-files` | `{ "value": number }`; negative values are saved as `10` | `{ "status": "ok" }` |
-| `GET` | `/usage-statistics-enabled` | none | `{ "usage-statistics-enabled": boolean }` |
-| `PUT/PATCH` | `/usage-statistics-enabled` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/proxy-url` | none | `{ "proxy-url": string }` |
-| `PUT/PATCH` | `/proxy-url` | `{ "value": string }` | `{ "status": "ok" }` |
-| `DELETE` | `/proxy-url` | none | `{ "status": "ok" }` |
-| `GET` | `/request-log` | none | `{ "request-log": boolean }` |
-| `PUT/PATCH` | `/request-log` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/request-retry` | none | `{ "request-retry": number }` |
-| `PUT/PATCH` | `/request-retry` | `{ "value": number }` | `{ "status": "ok" }` |
-| `GET` | `/max-retry-credentials` | none | `{ "max-retry-credentials": number }` |
-| `PUT/PATCH` | `/max-retry-credentials` | `{ "value": number }` | `{ "status": "ok" }` |
-| `GET` | `/max-retry-interval` | none | `{ "max-retry-interval": number }` |
-| `PUT/PATCH` | `/max-retry-interval` | `{ "value": number }` | `{ "status": "ok" }` |
-| `GET` | `/force-model-prefix` | none | `{ "force-model-prefix": boolean }` |
-| `PUT/PATCH` | `/force-model-prefix` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/routing/strategy` | none | `{ "strategy": "round-robin" }` or `{ "strategy": "fill-first" }` |
-| `PUT/PATCH` | `/routing/strategy` | `{ "value": "round-robin" }`, `roundrobin`, `rr`, `fill-first`, `fillfirst`, or `ff` | `{ "status": "ok" }` |
-| `GET` | `/quota-exceeded/switch-project` | none | `{ "switch-project": boolean }` |
-| `PUT/PATCH` | `/quota-exceeded/switch-project` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/quota-exceeded/switch-preview-model` | none | `{ "switch-preview-model": boolean }` |
-| `PUT/PATCH` | `/quota-exceeded/switch-preview-model` | `{ "value": boolean }` | `{ "status": "ok" }` |
-
-### `/payload` Config Root
-
-`GET /payload` returns:
-
-```json
-{
-  "payload": {
-    "default": [
-      {
-        "models": [
-          {
-            "name": "gpt-*",
-            "protocol": "responses",
-            "from-protocol": "openai",
-            "headers": {
-              "X-Client-Tier": "tenant-*"
-            },
-            "match": [{ "metadata.client": "codex" }],
-            "not-match": [{ "metadata.mode": "dev" }],
-            "exist": ["tools.#(type==\"web_search\").type"],
-            "not-exist": ["metadata.disable_payload"]
-          }
-        ],
-        "params": { "reasoning.effort": "high" }
-      }
-    ],
-    "default-raw": [],
-    "override": [],
-    "override-raw": [],
-    "filter": [
-      {
-        "models": [{ "name": "*", "protocol": "responses" }],
-        "params": ["metadata.debug"]
-      }
-    ]
-  }
-}
-```
-
-`GET /payload` returns the complete persisted payload root, including advanced model matcher fields that older frontends may not recognize.
-
-`PUT /payload` accepts either a raw payload object, `{ "value": <payload> }`, or `{ "payload": <payload> }`. It replaces the complete `payload` root and validates the full schema without dropping advanced matcher fields.
-
-`PATCH /payload` accepts the same body shapes and applies object merge-patch semantics to the existing `payload` root: submitted object fields are merged recursively, `null` removes a field, arrays are replaced as whole values, and sibling fields not present in the patch are preserved. This lets clients update one section, such as `filter`, without deleting `default`, `override`, or advanced matcher fields.
-
-`DELETE /payload` removes the root from the config snapshot.
-
-Successful writes return:
-
-```json
-{ "status": "ok" }
-```
-
-### `/antigravity` Config Root
-
-`GET /antigravity` returns:
-
-```json
-{
-  "antigravity": {
-    "sensitive-words": ["API", "proxy"]
-  }
-}
-```
-
-`GET /antigravity` returns the persisted `antigravity` provider config root.
-
-`PUT /antigravity` accepts a raw antigravity object, `{ "value": <antigravity> }`, or `{ "antigravity": <antigravity> }`. It replaces the complete `antigravity` root and validates its schema.
-
-`PATCH /antigravity` accepts the same body shapes and applies object merge-patch semantics to the existing `antigravity` root: submitted object fields are merged recursively, `null` removes a field, and arrays are replaced as whole values.
-
-`DELETE /antigravity` removes the root from the config snapshot.
-
-Successful writes return:
-
-```json
-{ "status": "ok" }
-```
 
 ## Nodes, Version, and Certificates
 
@@ -819,9 +607,9 @@ Example response:
 | `cpas[].plugin_report_state` | string | Same semantics as `nodes[].plugin_report_state`. |
 | `cpas[].plugin_report_statuses` | array | Plugin reports associated with this CPA node, matched by node ID when possible and IP as a fallback. |
 
-### GET `/latest-version`
+### GET `/server/latest-version`
 
-Fetches the latest CLIProxyAPIHome release from GitHub. If `proxy-url` is configured, the request uses that proxy.
+Fetches the latest CLIProxyAPIHome release from GitHub. If `requests.proxy-url` is configured, the request uses that proxy.
 
 Input: none.
 
@@ -897,7 +685,7 @@ Example response:
 
 Plugin store routes list registry entries and install a selected plugin into the DB-backed Home config. Install writes `plugins.configs.<pluginID>.store` with a pinned manifest. GitHub-release installs pin the repository, version, and exact release tag; direct installs pin the version and source registry URL, then Home-mode CPA nodes resolve the current-platform artifact URL and SHA-256 from that registry during runtime config application. Store-installed plugins are not downloaded or loaded by the Home process by default; set `plugins.configs.<pluginID>.load-in-home: true` only for trusted provider/auth plugins that must run inside Home.
 
-### GET `/plugin-store`
+### GET `/plugins/store`
 
 Lists plugin entries from the built-in official registry plus any configured `plugins.store-sources`.
 
@@ -964,7 +752,7 @@ Common errors:
 { "error": "plugin_store_registry_failed", "message": "detail" }
 ```
 
-### POST `/plugin-store/:id/install`
+### POST `/plugins/store/:id/install`
 
 Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`. `github-release` entries install the latest GitHub release by default; pass `version` to pin a specific release tag such as `1.0.3` or `v1.0.3`. `direct` entries write a source-backed v2 manifest; when `version` is supplied it must match either the registry entry version or an item in `versions[]`.
 
@@ -1009,7 +797,7 @@ Common errors:
 { "error": "invalid_config", "message": "detail" }
 ```
 
-### POST `/plugin-store/:id/uninstall`
+### POST `/plugins/store/:id/uninstall`
 
 Uninstalls a plugin from the whole Home/CPA cluster. The route removes the plugin store manifest from the shared Home config and creates a delete task for all CPA nodes; active Home nodes also delete their local current-platform artifact when they apply the config change.
 
@@ -1404,9 +1192,9 @@ Common errors:
 
 ## Client API Keys
 
-### GET `/api-keys`
+### GET `/access/api-keys`
 
-The response includes a strong `ETag` header for the complete visible API key collection. Clients that perform a read-modify-write replacement should send this value back in `If-Match` on `PUT /api-keys`.
+The response includes a strong `ETag` header for the complete visible API key collection. Clients that perform a read-modify-write replacement should send this value back in `If-Match` on `PUT /access/api-keys`.
 
 Returns client API keys accepted by Home.
 
@@ -1463,7 +1251,7 @@ Fields:
 | `APIKeyEntry.channels` | array of integer | Bound channel group IDs. An empty array is non-restrictive. |
 | `APIKeyEntry.model_groups` | array of integer | Bound model group IDs. An empty array is non-restrictive. |
 
-### POST `/api-keys`
+### POST `/access/api-keys`
 
 Atomically creates one client API key without replacing the existing list.
 
@@ -1499,7 +1287,7 @@ Successful response:
 }
 ```
 
-### PUT `/api-keys`
+### PUT `/access/api-keys`
 
 Replaces the complete client API key list.
 
@@ -1553,7 +1341,7 @@ Successful response:
 { "status": "ok" }
 ```
 
-### PATCH `/api-keys`
+### PATCH `/access/api-keys`
 
 Updates one client API key. Stable `id` / `api_key_id` selection is preferred. Legacy `index`, `old/new`, and raw-key selectors remain available for compatibility and are resolved to one database record before the update is applied. When `old/new` is used and the old value does not exist, `new` is created atomically. This route can also update `display_name`, `user_id`, `channels`, and `model_groups` for an existing API key.
 
@@ -1652,7 +1440,7 @@ Successful response:
 }
 ```
 
-### DELETE `/api-keys`
+### DELETE `/access/api-keys`
 
 Deletes one client API key. Stable ID selection is preferred; index and value selectors remain available for compatibility.
 
@@ -1677,7 +1465,7 @@ Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both s
 
 ## Billing
 
-All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview` or `/v0/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
+All paths in this section are relative to the Management API base URL, for example `/v8/management/billing/overview` or `/v8/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
 Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. All three routes use the half-open interval `[from,to)`: `from` is included and `to` is excluded. The optional `timezone` parameter is a reporting-timezone override and must be an IANA timezone name. When omitted, the routes use `/billing/settings.report_timezone`, which defaults to `UTC`. Date-only values use calendar dates in the applied reporting timezone, and a date-only `to` is normalized to the next local midnight so the whole ending day remains included across DST transitions. Explicit timestamps are exact exclusive boundaries and are not shifted or expanded by the reporting timezone. `/billing/overview` also uses the applied reporting timezone for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. The reporting timezone only controls query boundaries and report grouping; it never reprices immutable charges, changes price snapshots, or mutates user balances. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
@@ -2076,277 +1864,153 @@ Missing records return:
 { "error": "proxy_pool_not_found", "message": "record not found" }
 ```
 
-## Provider API Key Routes
+## Upstream API-key Configuration
 
-These routes manage upstream API-key credentials:
+Upstream provider keys are configured through the v8 config tree. They are distinct from client access keys managed by `/access/api-keys`.
 
-```text
-GET    /gemini-api-key
-PUT    /gemini-api-key
-PATCH  /gemini-api-key
-DELETE /gemini-api-key
+| Config path | Credential provider |
+| --- | --- |
+| `/config/api-keys/gemini` | `gemini` |
+| `/config/api-keys/interactions` | `gemini-interactions` (native Google Interactions) |
+| `/config/api-keys/vertex` | `vertex` (API key) |
+| `/config/api-keys/codex` | `codex` |
+| `/config/api-keys/claude` | `claude` |
+| `/config/api-keys/xai` | `xai` |
+| `/config/api-keys/meta` | `meta` |
+| `/config/api-keys/openai-compatibility` | Configured compatibility provider name |
 
-GET    /interactions-api-key
-PUT    /interactions-api-key
-PATCH  /interactions-api-key
-DELETE /interactions-api-key
+All paths support `GET`, `PUT`, `PATCH`, and `DELETE`. `GET` returns a raw group array. `PUT` and `PATCH` replace the entire array for that family; neither appends nor patches one key by index. `DELETE` removes that family and clears its provider-key records. Send `[]` to replace it with an empty list. Removing one key requires writing the remaining complete family list with retained `id` values. These writes return `{"status":"ok","config-version":8}`.
 
-GET    /claude-api-key
-PUT    /claude-api-key
-PATCH  /claude-api-key
-DELETE /claude-api-key
+### Native Provider Groups
 
-GET    /codex-api-key
-PUT    /codex-api-key
-PATCH  /codex-api-key
-DELETE /codex-api-key
-
-GET    /xai-api-key
-PUT    /xai-api-key
-PATCH  /xai-api-key
-DELETE /xai-api-key
-
-GET    /meta-api-key
-PUT    /meta-api-key
-PATCH  /meta-api-key
-DELETE /meta-api-key
-
-GET    /vertex-api-key
-PUT    /vertex-api-key
-PATCH  /vertex-api-key
-DELETE /vertex-api-key
-
-GET    /openai-compatibility
-PUT    /openai-compatibility
-PATCH  /openai-compatibility
-DELETE /openai-compatibility
-```
-
-Home synthesizes DB auth records from these config-like payloads. xAI API-key usage is ingested through the normal usage pipeline with `provider=xai` and an API-key credential type, so it is available in usage records, provider/credential aggregates, billing, and legacy `/api-key-usage` output under the `xai` provider bucket.
-
-### Credential Field Structures
-
-`GeminiKey`:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `api-key` | string | Upstream Gemini API key. May be empty when `base-url` is non-empty, for example when custom `headers` provide upstream authentication. |
-| `priority` | integer | Higher priority credentials are selected first. |
-| `prefix` | string | Optional model namespace prefix. |
-| `base-url` | string | Optional Gemini API base URL override. |
-| `proxy-url` | string | Optional per-key outbound proxy. |
-| `models` | array of `ModelAlias` | Optional upstream model aliases. |
-| `headers` | object string to string | Extra upstream request headers. |
-| `excluded-models` | array of string | Model IDs excluded from this key. |
-| `disable-cooling` | boolean | Optional credential override that takes precedence over the global setting. `true` disables request-error and quota cooldowns; `false` explicitly enables them; omission inherits the global value. Covers 402/403/404, 408/500/502/503/504, and model-level 429. |
-| `request-retry` | integer | Optional credential override for additional retry rounds. `0` disables additional rounds; omission or a negative value inherits the global setting. |
-| `auth-index` | string | Compatibility credential identifier. |
-| `id` | string | Canonical immutable credential UUID. Responses and exports use this field. |
-| `uuid` | string | Legacy input-only alias for `id`; it is normalized to `id` and never returned or exported. |
-| `disabled` | boolean | Read-only DB auth disabled flag. Use `PATCH /auth-files/status` to change it. |
-
-`GeminiKey` is used by both `gemini-api-key` and `interactions-api-key`; the latter creates `gemini-interactions` credentials for native Interactions execution. At least one of `api-key` or `base-url` must be non-empty. Entries with the same API key and base URL remain distinct when their `prefix`, `proxy-url`, or normalized `headers` differ.
-
-`ClaudeKey`, `CodexKey`, `XAIKey`, and `VertexCompatKey` use the same common fields. `XAIKey` uses the native xAI executor and requires `base-url` (normally `https://api.x.ai/v1`). Additional notable fields:
-
-| Field | Applies to | Description |
-| --- | --- | --- |
-| `cloak` | Claude | Optional request cloaking config. |
-| `experimental-cch-signing` | Claude | Enables experimental CCH signing for cloaked Claude requests. |
-| `websockets` | Codex, xAI | Enables Responses API websocket transport. |
-| `alpha-search` | Codex | Allows this API key to serve `/v1/alpha/search` through `base-url` plus `/alpha/search`. Defaults to `false`. |
-| `api-key` | Vertex | Sent as `x-goog-api-key`. |
-
-`OpenAICompatibility`:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | string | Provider name. |
-| `priority` | integer | Higher priority providers are selected first. |
-| `disabled` | boolean | Disables this provider when true. |
-| `prefix` | string | Optional model namespace prefix. |
-| `base-url` | string | OpenAI-compatible API base URL. |
-| `api-key-entries` | array of `OpenAICompatibilityAPIKey` | Provider API keys and optional proxies. |
-| `models` | array of `OpenAICompatibilityModel` | Model definitions and aliases. On `PUT`/`PATCH`, an omitted or empty list triggers a best-effort one-time discovery from `base-url` + `/models` using the first API key. Nonempty lists are preserved; discovery failures leave the list empty. Models are not refreshed automatically afterward. |
-| `headers` | object string to string | Extra upstream headers. |
-| `disable-cooling` | boolean | Optional provider override that takes precedence over the global setting for all of its credentials. `true` disables request-error and quota cooldowns; `false` explicitly enables them; omission inherits the global value. Covers 402/403/404, 408/500/502/503/504, and model-level 429. |
-| `request-retry` | integer | Optional provider override for additional retry rounds across all of its credentials. `0` disables additional rounds; omission or a negative value inherits the global setting. |
-| `id` | string | Canonical immutable UUID of the fallback credential when `api-key-entries` is empty. Responses and exports use this field. |
-| `uuid` | string | Legacy input-only alias for the fallback `id`; it is normalized to `id` and never returned or exported. |
-
-Shared nested structures:
-
-```json
-{
-  "ModelAlias": {
-    "name": "upstream-model",
-    "alias": "client-visible-model",
-    "display-name": "Catalog name",
-    "force-mapping": true
-  },
-  "OpenAICompatibilityAPIKey": {
-    "id": "canonical-credential-uuid",
-    "uuid": "legacy-input-only-credential-uuid",
-    "api-key": "provider-key",
-    "proxy-url": "http://127.0.0.1:7890"
-  },
-  "OpenAICompatibilityModel": {
-    "name": "upstream-model",
-    "alias": "client-visible-model",
-    "thinking": {
-      "min": 0,
-      "max": 24576,
-      "zero_allowed": true,
-      "dynamic_allowed": true,
-      "levels": ["low", "medium", "high"]
-    }
-  },
-  "CloakConfig": {
-    "mode": "auto",
-    "strict-mode": false,
-    "sensitive-words": ["word"],
-    "cache-user-id": true
-  }
-}
-```
-
-For each `OpenAICompatibilityAPIKey`, `uuid` is accepted as a legacy input-only alias for `id`. It is normalized to `id` and is never returned or exported.
-
-### GET Provider Key Routes
-
-Input: none.
-
-Example response:
-
-```json
-{
-  "gemini-api-key": [
-    {
-      "auth_index": "auth-db-id",
-      "id": "auth-db-id",
-      "uuid": "auth-db-id",
-      "api-key": "AIza...",
-      "base-url": "https://generativelanguage.googleapis.com",
-      "prefix": "team-a",
-      "proxy-url": "",
-      "disabled": false,
-      "priority": 10,
-      "request-retry": 2,
-      "headers": { "X-Test": "1" },
-      "models": [
-        { "name": "gemini-upstream", "alias": "gemini-alias" }
-      ]
-    }
-  ]
-}
-```
-
-### PUT Provider Key Routes
-
-Replaces the full list for the route provider.
-
-Input can be an array:
+Example `PUT /config/api-keys/codex` body:
 
 ```json
 [
   {
-    "api-key": "provider-key",
-    "base-url": "https://api.example.com",
+    "name": "team-a",
+    "base-url": "https://api.example.com/v1",
+    "priority": 10,
+    "prefix": "team-a",
+    "headers": { "X-Team": "a" },
+    "request-retry": 3,
+    "disable-cooling": true,
     "models": [
-      { "name": "upstream-model", "alias": "alias-model" }
+      {
+        "name": "gpt-5",
+        "alias": "reasoner",
+        "display-name": "Team Reasoner",
+        "max-context-length": 128000,
+        "thinking": { "levels": ["none", "low", "high", "auto"] },
+        "support-configuration-update": true
+      }
+    ],
+    "keys": [
+      { "api-key": "provider-key-a", "weight": 5, "disable-codex-cloaking": false },
+      { "api-key": "provider-key-b", "weight": 2, "request-retry": 0, "disable-cooling": false, "headers": null }
     ]
   }
 ]
 ```
 
-or a wrapper:
+For native providers, a group accepts `name`, `base-url`, `keys`, and the shared fields below. `base-url` belongs to the group and is rejected inside a key. `keys` is required and must be an array of objects. Provider-specific options belong on each key, not on the group. Field support still depends on the provider's credential type.
+
+| Shared field | Type | Meaning |
+| --- | --- | --- |
+| `priority` | integer | Higher-priority eligible credentials are selected first. |
+| `prefix` | string | Optional model namespace. |
+| `proxy-url` | string | Outbound proxy; `direct` explicitly bypasses a configured proxy. |
+| `headers` | object of strings | Complete upstream header map. |
+| `models` | array | Provider-specific model definitions and aliases. |
+| `excluded-models` | string array | Model exclusion patterns. |
+| `disable-cooling` | boolean | Explicit `true`/`false` overrides Home's global cooling policy. |
+| `request-retry` | integer | Additional retry rounds; `0` disables additional rounds, negative values use the global fallback. |
+| `request-scoped-errors` | rule array | Per-credential error rules for Gemini/Interactions, Claude, Codex, xAI, and Meta; not a Vertex API-key field. |
+
+A missing or `null` per-key shared field inherits the group value, then that field's runtime fallback. Explicit `false`, `0`, `""`, `[]`, and `{}` override inheritance where supported. Maps and lists replace the inherited value as a whole; headers are not merged with group headers. Home persists effective credential settings, so readback can materialize inheritance and generate one native group per credential. Do not depend on group names, ordering, or the original `null` spelling surviving a save.
+
+`api-key` identifies the upstream secret. `id` is the canonical immutable credential UUID returned on reads and exports; `uuid` remains an input-only alias normalized to `id`. Keep `id` when changing routing fields or secrets to preserve credential identity. Native keys do not accept the operational `disabled` field through the config schema. `/credentials/status` applies to OAuth/file credentials, while OpenAI-compatible groups support their own `disabled` flag.
+
+### Weights and Weighted Routing
+
+Set `routing.strategy` to `weighted-round-robin` to enable weighted credential selection. `round-robin` and `fill-first` remain supported. Weight is applied among eligible credentials after routing/priority/availability filtering; it does not override model restrictions, concurrency limits, or cooldowns.
+
+Each key can specify integer `weight`; omission defaults to `1`, the maximum is `1000000`, and non-positive values exclude the credential only while weighted routing is active. Weight belongs to each key, not to the group. Explicit `null`, strings, and fractional values are invalid in config key lists. OAuth/file credentials can carry a top-level numeric `weight` in their uploaded auth JSON.
+
+### Provider-specific Key Options
+
+| Field | Provider | Meaning |
+| --- | --- | --- |
+| `disable-codex-cloaking` | Codex | Optional boolean controlling Codex identity headers for this API-key credential. |
+| `websockets` | Codex, xAI | Enables Responses WebSocket transport. |
+| `alpha-search` | Codex | Allows `/v1/alpha/search` through the configured upstream `/alpha/search`. |
+| `cloak` | Claude | Object with `mode`, `strict-mode`, `sensitive-words`, and `cache-user-id`. |
+| `experimental-cch-signing` | Claude | Retained for compatibility; signing is automatic on supported direct upstreams. |
+| `rebuild-mid-system-message` | Claude | Rebuilds system messages found in the conversation body. |
+| `fingerprint-profile` | Claude | Optional fingerprint profile such as `claude-code-cli`; empty leaves the caller's profile in control. |
+| `request-scoped-errors` | Gemini/Interactions, Claude, Codex, xAI, Meta | Overrides inherited request-scoped error rules. |
+
+Gemini/Interactions accepts an API key or a non-empty group base URL. Vertex sends `api-key` as `x-goog-api-key`. Native xAI requires a base URL, normally `https://api.x.ai/v1`; its usage is reported under `provider=xai` through usage, aggregates, billing, and `/observability/usage/api-keys`.
+
+### OpenAI-compatible Groups
+
+`api-keys.openai-compatibility[]` preserves the compatibility-provider schema, with `keys` replacing the legacy `api-key-entries`. Group fields include `name`, `base-url`, `priority`, `disabled`, `prefix`, `models`, `headers`, `disable-cooling`, `request-retry`, `request-scoped-errors`, and `support-prompt-cache-key`. Individual keys accept `id`/input-only `uuid`, `api-key`, `proxy-url`, and `weight`; native-provider shared-field overrides are not available on these individual key entries. An empty `keys` list uses the existing keyless fallback-credential behavior, whose identity is the group's `id`.
+
+Example `PUT /config/api-keys/openai-compatibility` body:
 
 ```json
-{ "items": [ { "api-key": "provider-key" } ] }
-```
-
-Home also accepts `{ "<route-key>": [...] }`, `{ "list": [...] }`, `{ "data": [...] }`, or a single entry object.
-
-Successful response:
-
-```json
-{ "status": "ok" }
-```
-
-### PATCH Provider Key Routes
-
-Updates one provider credential.
-
-Example request:
-
-```json
-{
-  "index": 0,
-  "match": "old-api-key",
-  "name": "openai-provider-name",
-  "value": {
-    "api-key": "new-api-key",
-    "base-url": "https://api.example.com",
-    "proxy-url": "",
-    "headers": { "X-Test": "1" },
-    "excluded-models": ["model-a"]
+[
+  {
+    "name": "example",
+    "base-url": "https://api.example.com/v1",
+    "support-prompt-cache-key": true,
+    "keys": [{ "api-key": "provider-key", "weight": 3 }],
+    "models": [
+      {
+        "name": "upstream-model",
+        "alias": "my-model",
+        "display-name": "My Model",
+        "max-context-length": 32768,
+        "input-modalities": ["text", "image"],
+        "output-modalities": ["text"],
+        "thinking": { "levels": ["low", "high"] },
+        "use-max-completion-tokens": true
+      }
+    ]
   }
-}
+]
 ```
 
-Selector fields:
+### Model and Error-rule Fields
 
-| Field | Type | Description |
+| Model field | Scope | Meaning |
 | --- | --- | --- |
-| `index` | integer | Zero-based index in the filtered provider list. |
-| `match` | string | API-key value to match. |
-| `name` | string | OpenAI-compatible provider name or auth label. |
-| `id` | string | DB auth ID. |
-| `uuid` | string | Alias of `id`. |
-| query `base-url` | string | Optional base URL to narrow API-key matches. |
+| `name`, `alias` | All families | Upstream identifier and client-facing alias. |
+| `display-name`, `force-mapping` | All families | Catalog display label; optional response model rewriting to the mapped upstream name. |
+| `thinking` | All families | Explicit thinking capability: `min`, `max`, `zero-allowed`, `dynamic-allowed`, `levels`. Config-tree JSON uses these YAML-style hyphenated names; operational model JSON uses `zero_allowed` / `dynamic_allowed`. |
+| `max-context-length` | All except Vertex | Positive configured context limit, published as model `context_length`. |
+| `is-compat` | All except Vertex | Executor compatibility option for retaining thinking blocks with empty signatures; not a model-catalog response field. |
+| `support-configuration-update` | Codex | Enables Responses `configuration_update` for this configured model; defaults to `false`. |
+| `image` | OpenAI compatibility | Marks an image model, published with type `openai-image`. |
+| `input-modalities`, `output-modalities` | OpenAI compatibility | Explicit modality lists exposed by the model catalog. |
+| `use-max-completion-tokens` | OpenAI compatibility | Selects the `max_completion_tokens` upstream parameter. |
 
-`PATCH` does not use body `auth_index` as the DB ID selector. Use `id` or `uuid` for ID-based patching.
+Thinking levels are trimmed, lowercased, and deduplicated. `none` enables zero-budget support and `auto` enables dynamic-budget support. Explicit `thinking` and positive context limits survive credential persistence and appear in model/dispatch metadata. OpenAI-compatible non-image models retain the default `low`, `medium`, `high` levels when thinking is omitted; image models do not receive that default.
 
-Selectors that still match multiple credentials are rejected. Use `id`, `uuid`, or `index` to select one credential when routing fields such as `prefix`, `proxy-url`, or `headers` distinguish entries with the same API key and base URL.
-
-Within `value`, `disable-cooling` accepts a boolean override and `request-retry` accepts an integer additional-round override. Set either field to `null`, or set `request-retry` to a negative value, to clear its existing override and inherit the global setting; omitting a field leaves its current override unchanged.
-
-Successful response:
+Request-scoped rules use the exact field spelling `match-regexr`:
 
 ```json
-{ "status": "ok" }
+[
+  { "status": 400, "match": ["invalid request"], "action": "stop" },
+  { "status": 429, "match-regexr": ["rate.*limit"], "action": "continue-and-cooldown" }
+]
 ```
 
-### DELETE Provider Key Routes
-
-Deletes one provider credential.
-
-Query parameters:
-
-| Query | Type | Description |
-| --- | --- | --- |
-| `id` | string | DB auth ID. |
-| `uuid` | string | Alias of `id`. |
-| `auth_index` | string | DB auth ID or runtime index. |
-| `index` | integer | Zero-based index in the filtered provider list. |
-| `api-key` | string | API-key value. |
-| `api_key` | string | Alias of `api-key`. |
-| `match` | string | Alias of `api-key`. |
-| `base-url` | string | Optional base URL to narrow API-key matches. |
-| `base_url` | string | Alias of `base-url`. |
-| `name` | string | Provider or compatibility name. |
-
-Selectors that still match multiple credentials are rejected. Use `id`, `uuid`, `auth_index`, or `index` to delete exactly one credential.
-
-Successful response:
-
-```json
-{ "status": "ok" }
-```
+Supported actions are `stop`, `stop-and-cooldown`, `continue`, and `continue-and-cooldown`. API keys use group/key `request-scoped-errors`; OAuth uses the provider-keyed map at `/config/oauth/request-scoped-errors`.
 
 ## Auth Files and OAuth
 
-### GET `/auth-files`
+### GET `/credentials`
 
 Lists OAuth/file-backed credentials.
 
@@ -2400,7 +2064,7 @@ the current value without downloading the credential JSON:
 | `disable-cooling` | boolean | Optional credential cooling override. `true` disables cooling, `false` explicitly enables it, and the field is omitted when unset so the credential inherits the global setting. |
 | `request-retry` | integer | Optional credential override for additional retry rounds. `0` disables additional rounds, and the field is omitted when unset so the credential inherits the global setting. |
 
-### GET `/auth-files/models?name=<name-or-id>`
+### GET `/credentials/models?name=<name-or-id>`
 
 Returns models associated with an auth file or auth ID.
 
@@ -2425,7 +2089,7 @@ Example response:
 }
 ```
 
-### GET `/auth-files/download`
+### GET `/credentials/download`
 
 Downloads one credential JSON.
 
@@ -2443,7 +2107,7 @@ Query parameters:
 
 Response: `application/json; charset=utf-8` attachment.
 
-### POST `/auth-files`
+### POST `/credentials`
 
 Uploads one or more credential JSON payloads.
 
@@ -2471,7 +2135,7 @@ Raw JSON response:
 { "status": "ok", "name": "uuid.json" }
 ```
 
-### DELETE `/auth-files`
+### DELETE `/credentials`
 
 Deletes credential records or files.
 
@@ -2500,7 +2164,7 @@ Example responses:
 { "status": "ok", "deleted": 2 }
 ```
 
-### PATCH `/auth-files/status`
+### PATCH `/credentials/status`
 
 Enables or disables an OAuth/file-backed auth.
 
@@ -2526,7 +2190,7 @@ Example response:
 { "status": "ok", "disabled": true }
 ```
 
-### PATCH `/auth-files/fields`
+### PATCH `/credentials/fields`
 
 Updates editable auth metadata.
 
@@ -2579,20 +2243,47 @@ Example response:
 { "status": "ok" }
 ```
 
-### OAuth Start Routes
+### POST `/credentials/refresh`
 
-These routes create provider login URLs or device-flow sessions:
+Manually refreshes OAuth/file-backed credentials through Home's refresh coordinator and database ownership rules.
 
-```text
-GET /anthropic-auth-url
-GET /codex-auth-url
-GET /antigravity-auth-url
-GET /kimi-auth-url
-GET /xai-auth-url
-GET /devin-auth-url
-GET /meta-auth-url
-GET /<plugin-provider>-auth-url
+| JSON field / query | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | Credential filename/name or identifier used by the OAuth credential lookup. |
+| `auth_index` | string | Alternative credential identifier. |
+| `all` | boolean | Refresh all enabled OAuth/file credentials; query form is `all=true`. |
+
+A JSON body is optional when selectors are supplied in the query. Body `name` and `auth_index` take precedence over query values; `all=true` in either place selects all. Without `all`, a name or auth index is required. API-key credentials are not included in this refresh operation.
+
+Single-credential success returns `{"ok":true,"auth":{...}}`, where `auth` has the `/credentials` entry shape. Batch success returns:
+
+```json
+{
+  "ok": true,
+  "results": [
+    { "id": "credential-uuid-a", "success": true },
+    { "id": "credential-uuid-b", "success": false, "error": "refresh failed" }
+  ]
+}
 ```
+
+Batch requests return `200` even when individual refreshes fail; inspect `results[].success`. Invalid input returns `400`, an unknown single credential returns `404`, a failed single refresh returns `500 refresh_failed`, and an unavailable coordinator returns `503`.
+
+### GET `/oauth/auth-url`
+
+Creates a provider login URL or device-flow session. Required query `provider` is trimmed and case-insensitive for built-in providers.
+
+| Provider | Flow |
+| --- | --- |
+| `claude` | Anthropic OAuth. The start endpoint uses `claude`, not the old `anthropic-auth-url` spelling. |
+| `codex` | Codex OAuth. |
+| `antigravity` | Antigravity OAuth. |
+| `kimi` | Kimi device flow using the default Kimi domain. |
+| `kimi-ai` | Device flow using `kimi.ai`; credentials retain the `kimi-ai` provider/domain. |
+| `xai` | xAI OAuth. |
+| `devin` | Devin PKCE OAuth. |
+| `meta` | Meta device flow. |
+| Plugin `oauth_provider` | Login handled by a registered Home-loaded plugin. |
 
 Common response:
 
@@ -2604,11 +2295,21 @@ Common response:
 }
 ```
 
-`GET /kimi-auth-url` and `GET /meta-auth-url` start a device flow and return the verification URL. Completion is handled by Home in the background. `GET /meta-auth-url` also returns `user_code` when the upstream device-flow response includes one. If Meta omits `verification_uri_complete`, clients must open `url` and enter `user_code`.
+Kimi, Kimi AI, and Meta return a verification URL and complete in Home's background device-flow worker. Meta also returns `user_code` when supplied by the upstream; if there is no complete verification URL, open `url` and enter that code. Poll `/oauth/status?state=...` to observe completion.
 
-`GET /<plugin-provider>-auth-url` is available for Home-loaded plugin providers returned by `GET /plugins` with `supports_oauth: true`, `effective_enabled: true`, and a non-empty `oauth_provider`. The provider segment is normalized to lowercase and must contain only letters, numbers, or hyphens.
+Plugin providers must appear in `/plugins` with `supports_oauth: true`, `effective_enabled: true`, and a non-empty `oauth_provider`. Plugin provider keys are lowercase letters, digits, or hyphens; v8 plugins receive `/v8/management/oauth/callback` as their callback route. Missing provider returns `400 {"error":"provider is required"}`; unknown/unavailable providers return `404 {"error":"provider_not_found"}`.
 
-### GET `/get-auth-status`
+### DELETE `/oauth/session`
+
+Requires query `state`. Cancels a pending DB-backed login session and prevents a subsequent callback or poll from saving its credentials, including on another Home node. Completed logins and existing credentials are not deleted.
+
+```json
+{ "status": "ok", "cancelled": true }
+```
+
+Returns `200` with `cancelled:false` when no pending session was changed, including an unknown or already completed/cancelled state. Missing or malformed state returns `400`. Polling a cancelled session reports `Authentication cancelled`; submitting its callback returns `409 oauth flow is not pending`.
+
+### GET `/oauth/status`
 
 Returns the current OAuth session status.
 
@@ -2631,11 +2332,13 @@ Unknown or expired state tokens return an error instead of being treated as comp
 
 For plugin OAuth sessions, this route polls the Home-loaded plugin. When the plugin returns success, Home converts the returned auth data into DB-backed auth records, registers models for the auths, completes the OAuth session, and then returns `{ "status": "ok" }`.
 
-### POST `/oauth-callback`
+A missing `state` returns `200 {"status":"ok"}` and does not verify a login. A cancelled session returns `200 {"status":"error","error":"Authentication cancelled"}`. Invalid state syntax returns `400`.
 
-Processes provider OAuth callback metadata.
+### GET/POST `/oauth/callback`
 
-Example request:
+This v8 endpoint does not require a management key. It validates the pending DB-backed OAuth state and remains subject to Management API availability checks. The v0 `POST /v0/management/oauth-callback` still requires management authentication.
+
+`GET` accepts query parameters; `POST` accepts JSON:
 
 ```json
 {
@@ -2647,33 +2350,26 @@ Example request:
 }
 ```
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `provider` | string | yes | Built-in aliases: `anthropic`/`claude`, `codex`/`openai`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. For plugin OAuth sessions, pass the plugin `oauth_provider` key. `kimi` is not completed through this route. |
-| `redirect_url` | string | no | Full callback URL. Missing `code`, `state`, or `error` values can be extracted from it. |
-| `code` | string | conditionally | OAuth authorization code; required unless `error` is supplied. |
-| `state` | string | yes | OAuth state token. |
-| `error` | string | conditionally | Provider error; required when `code` is absent. |
+| Field | Required | Description |
+| --- | --- | --- |
+| `state` | yes | Pending OAuth state; POST may extract it from `redirect_url`. |
+| `code` | conditionally | Authorization code unless an error is supplied. |
+| `error` | conditionally | Provider error when code is absent. GET also accepts `error_description` as a fallback. |
+| `provider` | no | Defaults to the provider stored with the state. Built-in callback aliases include `anthropic`/`claude`, `codex`/`openai`, `antigravity`/`anti-gravity`, `xai`/`x-ai`/`grok`, and `devin`. Plugin sessions use their `oauth_provider`. |
+| `redirect_url` | no; POST only | Full callback URL used to fill missing state, code, or error. |
 
-Home reads session data from the DB-backed OAuth session. Built-in OAuth sessions exchange the code in the background and store resulting auth records in the DB. Plugin OAuth sessions store callback metadata in the session; `/get-auth-status` then polls the plugin and persists the auth records returned by the plugin.
+Kimi, Kimi AI, and Meta use device flow and are not completed by this callback. A provider inconsistent with the state is rejected. Success returns `200 {"status":"ok"}` to acknowledge acceptance; it does not prove token exchange is complete. Built-in code exchange runs in the background. Plugin callbacks save callback metadata, and `/oauth/status` polls the plugin and persists successful credentials.
 
-Example response:
+| Status | Error |
+| --- | --- |
+| `400` | `invalid body`, `invalid redirect_url`, `state is required`, `invalid state`, `code or error is required`, `unsupported provider`, `provider does not match state` |
+| `404` | `unknown or expired state` |
+| `409` | `oauth flow is not pending` |
+| `500` | `oauth_session_failed` |
 
-```json
-{ "status": "ok" }
-```
+### POST `/oauth/import?provider=vertex`
 
-Common errors:
-
-```json
-{ "status": "error", "error": "invalid body" }
-{ "status": "error", "error": "unsupported provider" }
-{ "status": "error", "error": "unknown or expired state" }
-{ "status": "error", "error": "oauth flow is not pending" }
-{ "status": "error", "error": "provider does not match state" }
-```
-
-### POST `/vertex/import`
+The `provider=vertex` query parameter is required. Missing provider returns `400`; unsupported providers return `404 provider_not_found`.
 
 Uploads a Vertex service account JSON and creates a Vertex OAuth/file-backed credential.
 
@@ -2689,7 +2385,7 @@ Example response:
 ```json
 {
   "status": "ok",
-  "auth-file": "vertex-project-id.json",
+  "auth-file": "11111111-2222-4333-8444-555555555555.json",
   "project_id": "project-id",
   "email": "service-account@example.iam.gserviceaccount.com",
   "location": "us-central1"
@@ -2698,9 +2394,112 @@ Example response:
 
 Home stores the resulting credential as DB-backed OAuth auth records and returns the generated `<uuid>.json` name in `auth-file`.
 
+## Credential Quota and Cooldown Operations
+
+### POST `/routing/cooldown/reset`
+
+Clears Home's routing cooldown for the selected credential, including its model cooldowns. It does not reset upstream account quota or delete stored quota snapshots. For a single model, use the existing `DELETE /credentials/:credential_id/cooldown` route.
+
+```json
+{ "auth_index": "credential-uuid" }
+```
+
+Success:
+
+```json
+{ "status": "ok", "auth_index": "credential-uuid", "models": ["model-a"] }
+```
+
+`auth_index` is required and is passed to Home's authoritative credential lookup; use the credential ID. Invalid input returns `400`, a missing credential returns `404 cooldown_reset_failed`, and an unavailable core manager returns `503`. Other failures use `cooldown_reset_failed`.
+
+### GET `/credentials/quota/providers`
+
+Lists quota providers registered in the Home plugin host plus available built-in collectors, ordered by `provider` then `plugin_id`.
+
+```json
+{
+  "providers": [
+    { "plugin_id": "", "provider": "codex", "supported_providers": ["codex"], "supports_reset": false },
+    { "plugin_id": "example-plugin", "provider": "example", "display_name": "Example", "supported_providers": ["example"], "supports_reset": true }
+  ]
+}
+```
+
+`display_name` and `supported_providers` are optional. Built-in collector entries are present only when Home has a collector trigger; the current built-in provider keys are `claude`, `antigravity`, `codex`, `kimi`, and `xai`. Plugin reset support is reported by `supports_reset`.
+
+### POST `/credentials/quota/fetch`
+
+Input:
+
+```json
+{ "auth_index": "credential-uuid-or-runtime-index", "plugin_id": "", "provider": "" }
+```
+
+`auth_index` is required; `authIndex` and `AuthIndex` are accepted aliases, checked in that order after `auth_index`. The lookup accepts the credential ID or runtime index. Optional `provider` defaults to the credential provider; optional `plugin_id` selects a specific plugin for the first fetch attempt.
+
+Home first tries the matching plugin. A handled plugin fetch returns `200` with the normalized quota object directly. If no plugin handles it and a built-in collector supports the credential's actual provider, Home queues collection and returns `202`:
+
+```json
+{ "accepted": 1, "running": true, "credential_id": "credential-uuid" }
+```
+
+`accepted` can be `0`; `running` is exactly `accepted > 0`, not a global collector-status probe. Poll `/quota/credentials/:credential_id` for the persisted snapshot after an asynchronous collection. An explicit plugin selection does not suppress this built-in fallback if the plugin leaves the request unhandled.
+
+Synchronous plugin response example:
+
+```json
+{
+  "subscription": { "plan": "pro", "tierName": "Pro", "tierId": "pro" },
+  "summary": [{ "key": "balance", "label": "Balance", "value": 12.5, "format": "currency", "currency": "USD" }],
+  "serverTimeOffsetMs": 250,
+  "groups": [
+    {
+      "displayName": "Requests",
+      "buckets": [{ "window": "daily", "remainingFraction": 0.75, "resetTime": "2026-09-30T00:00:00Z", "description": "Daily allowance" }]
+    }
+  ]
+}
+```
+
+All top-level plugin quota fields are optional. `subscription` carries `plan`, `tierName`, and `tierId`. Each summary metric has `key`, `label`, and numeric `value`, with optional `unit`, `format` (`number` or `currency`), and `currency`. Groups contain optional `displayName` and `buckets`; each bucket always emits numeric `remainingFraction` and can include `window`, `resetTime`, and `description`. The plugin quota object is a different shape from Home's DB snapshot response.
+
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid JSON or missing auth index. |
+| `404` | `auth not found`. |
+| `501` | `no quota provider available for credential`. |
+| `502` | The plugin handled the request but fetching failed. |
+| `500` | Credential lookup or asynchronous collection failed. |
+
+### POST `/credentials/quota/reset`
+
+Uses the same JSON selector fields as fetch. This operation requires a plugin quota reset implementation; it has no built-in collector fallback. On successful upstream reset, Home also clears routing cooldown for that credential.
+
+```json
+{ "status": "ok", "auth_index": "runtime-auth-index", "message": "Reset completed" }
+```
+
+`message` is optional. Invalid input returns `400`; unknown auth or a specified plugin without a quota provider returns `404`; an unavailable plugin host or missing matching quota provider returns `501`; plugin failure, rejection, or an unhandled provider reset returns `502`. If the upstream reset succeeds but Home cannot clear routing cooldown, the response is `500`; reread state before retrying.
+
+### GET/POST/DELETE `/plugins/:id/quota`
+
+These operations select a plugin by path and do not fall back to Home's built-in collectors.
+
+| Method | Credential selector | Result |
+| --- | --- | --- |
+| `GET` | Query `auth_index` or `authIndex` | Fetches current upstream plugin quota and returns the normalized object with `200`. This is an active fetch, not a cached read. |
+| `POST` | JSON `auth_index`, `authIndex`, or `AuthIndex` | Same fetch behavior as GET. |
+| `DELETE` | Query `auth_index`/`authIndex`, or the JSON selector aliases when query is absent | Resets plugin quota and clears Home routing cooldown; returns `status`, `auth_index`, and optional `message`. |
+
+Path `:id` controls plugin selection; JSON `plugin_id` and `provider` do not override it. Missing auth index returns `400`; missing auth/plugin quota provider or an unhandled request returns `404`; plugin failures or reset rejection return `502`; database or local cooldown-reset failures return `500`.
+
+### DELETE `/plugins/:id`
+
+Alias of `POST /plugins/store/:id/uninstall`, using Home's DB-backed uninstall handler. It removes the pinned plugin configuration and creates the same cluster-wide deletion task, with the same `status:"uninstalled"`, task, and restart fields described in the Plugin Store section. It is not a config-tree DELETE and does not use the config-write response shape.
+
 ## API Call Proxy
 
-### POST `/api-call`
+### POST `/requests/api-call`
 
 Sends an arbitrary HTTP request from the Home server. The route itself is protected by Management API authentication.
 
@@ -2724,7 +2523,7 @@ Example request:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `auth_index`, `authIndex`, `AuthIndex` | string | no | Credential index from `GET /auth-files` or provider-key routes. Used for proxy selection and `$TOKEN$` replacement. |
+| `auth_index`, `authIndex`, `AuthIndex` | string | no | Credential index from `GET /credentials` or provider-key routes. Used for proxy selection and `$TOKEN$` replacement. |
 | `method` | string | yes | HTTP method; normalized to uppercase. |
 | `url` | string | yes | Absolute URL with scheme and host. |
 | `header` | object string to string | no | Request headers. Header values containing `$TOKEN$` are replaced with the selected auth token. `Host` sets request host override. |
@@ -2739,7 +2538,7 @@ Token replacement is strict: if any header contains `$TOKEN$`, `auth_index` must
 Proxy priority:
 
 1. Selected credential proxy.
-2. Global `proxy-url`.
+2. Global `requests.proxy-url`.
 3. Direct transport with environment proxy disabled.
 
 Example response:
@@ -2756,7 +2555,7 @@ Example response:
 
 ## Usage and Logs
 
-### GET `/api-key-usage`
+### GET `/observability/usage/api-keys`
 
 Returns in-memory API-key usage grouped by provider and by `<base_url>|<api_key>`.
 
@@ -2820,23 +2619,23 @@ An invalid, expired, schema-incompatible, or filter-mismatched cursor returns HT
 
 Both responses include `observed_at`, `stale`, `coverage_complete`, `aggregates_complete`, `protocol_coverage_complete`, `minimum_processed_barrier_revision`, and `details_truncated`. The minimum barrier is the lowest processed barrier from the exact active membership lifetimes with visible snapshots. Freshness is calculated from Home database ingestion time, not CPA wall-clock time. Only complete multipart revisions are visible. Detail truncation does not make aggregates incomplete; a canceling membership, an active-lifetime mismatch, an incomplete/newer attempt, or a non-v1 active protocol makes diagnostics incomplete.
 
-`GET /auth-files` joins observations and authoritative limiter state by the stable DB credential UUID (`id`/`auth_index`). It always exposes the compatible in-flight fields: `in_flight`, `max_in_flight`, `max_in_flight_by_model`, `remaining`, `total_saturated`, `saturated_model_count`, and `admitted_in_flight`, plus `observed` and `limiter`. Credentials without a matching observation have `in_flight` and `observed` set to `null`; authoritative limiter counters remain available when a policy exists. Observation and limiter reads are independent optional joins: failure of either leaves only that projection `null` and still returns the auth files.
+`GET /credentials` joins observations and authoritative limiter state by the stable DB credential UUID (`id`/`auth_index`). It always exposes the compatible in-flight fields: `in_flight`, `max_in_flight`, `max_in_flight_by_model`, `remaining`, `total_saturated`, `saturated_model_count`, and `admitted_in_flight`, plus `observed` and `limiter`. Credentials without a matching observation have `in_flight` and `observed` set to `null`; authoritative limiter counters remain available when a policy exists. Observation and limiter reads are independent optional joins: failure of either leaves only that projection `null` and still returns the auth files.
 
 `GET /credentials/concurrency-policies` lists stored policies. `GET` and `PATCH /credentials/:credential_id/concurrency-policy` read or replace the presence-aware `max_in_flight` and `max_in_flight_by_model` fields. `PATCH` accepts an optional policy `version`; a stale version returns HTTP `409`. `GET /credentials/concurrency` consumes only policy and admitted-counter state; it never reads observations, always returns `observed: null`, and returns `fully_enforced: "unknown"`.
 
-When an observation is joined to a policy in `/credentials/in-flight`, `/credentials/in-flight/summary`, or `/auth-files`, `fully_enforced` is a diagnostic only: `"unknown"` for absent, stale, canceling, incomplete, non-v1-protocol, or barrier-behind observations; `"false"` when all coverage and barrier checks are known and the credential has unaccounted observed work; and `"true"` when those checks are known and unaccounted work is zero. A policy barrier is acknowledged only when the minimum processed active-lifetime observation barrier is at least the policy barrier. If the optional limiter read fails, the in-flight summary and details still return their observation with `limiter: null`.
+When an observation is joined to a policy in `/credentials/in-flight`, `/credentials/in-flight/summary`, or `/credentials`, `fully_enforced` is a diagnostic only: `"unknown"` for absent, stale, canceling, incomplete, non-v1-protocol, or barrier-behind observations; `"false"` when all coverage and barrier checks are known and the credential has unaccounted observed work; and `"true"` when those checks are known and unaccounted work is zero. A policy barrier is acknowledged only when the minimum processed active-lifetime observation barrier is at least the policy barrier. If the optional limiter read fails, the in-flight summary and details still return their observation with `limiter: null`.
 
-`PATCH /auth-files/fields` accepts the same limiter fields and optional `version`. Auth metadata and policy changes are one database transaction, so either both persist or neither does. Limiter fields are not written into auth JSON.
+`PATCH /credentials/fields` accepts the same limiter fields and optional `version`. Auth metadata and policy changes are one database transaction, so either both persist or neither does. Limiter fields are not written into auth JSON.
 
 ### Credential concurrency policy and limiter routes
 
 Before activating a policy, follow the [strict credential concurrency limits deployment runbook](../README.md). It defines the required topology, capability checks, certificate identities, and fail-closed mixed-version rollout.
 
-The policy route groups are `GET /credentials/concurrency-policies`, `GET /credentials/:credential_id/concurrency-policy` plus `PATCH /credentials/:credential_id/concurrency-policy`, and `GET /credentials/concurrency`. The first two read stored policy; the patch replaces only supplied fields; the final route reads policy plus the authoritative admitted-counter state. `PATCH /auth-files/fields` is the auth-files compatibility form of the same policy patch.
+The policy route groups are `GET /credentials/concurrency-policies`, `GET /credentials/:credential_id/concurrency-policy` plus `PATCH /credentials/:credential_id/concurrency-policy`, and `GET /credentials/concurrency`. The first two read stored policy; the patch replaces only supplied fields; the final route reads policy plus the authoritative admitted-counter state. `PATCH /credentials/fields` is the auth-files compatibility form of the same policy patch.
 
-A patch body must be valid JSON and supply at least one of `max_in_flight` or `max_in_flight_by_model`. A supplied total or model limit is `0` to remove that limit, or an integer from `1` through `credential-concurrency.max-limit`; model keys must be valid canonical model keys and cannot collide after canonicalization. `null` clears a supplied total or model map. `version` is optional optimistic concurrency control: the response includes the current `version`, and a stale submitted version is rejected rather than overwriting a newer policy.
+A patch body must be valid JSON and supply at least one of `max_in_flight` or `max_in_flight_by_model`. A supplied total or model limit is `0` to remove that limit, or an integer from `1` through `credentials.concurrency.max-limit`; model keys must be valid canonical model keys and cannot collide after canonicalization. `null` clears a supplied total or model map. `version` is optional optimistic concurrency control: the response includes the current `version`, and a stale submitted version is rejected rather than overwriting a newer policy.
 
-`admitted_in_flight` is the authoritative counter, not a reconstructed observation. `GET /credentials/concurrency` never joins snapshots, so every item has `observed: null` and `fully_enforced: "unknown"`. The compatible `/auth-files` fields remain `in_flight`, `max_in_flight`, `max_in_flight_by_model`, `remaining`, `total_saturated`, `saturated_model_count`, `admitted_in_flight`, `observed`, and `limiter`; absent observations do not hide an available authoritative counter.
+`admitted_in_flight` is the authoritative counter, not a reconstructed observation. `GET /credentials/concurrency` never joins snapshots, so every item has `observed: null` and `fully_enforced: "unknown"`. The compatible `/credentials` fields remain `in_flight`, `max_in_flight`, `max_in_flight_by_model`, `remaining`, `total_saturated`, `saturated_model_count`, `admitted_in_flight`, `observed`, and `limiter`; absent observations do not hide an available authoritative counter.
 
 The Management capability `credential_concurrency_limits_v2` declares policy and admitted-counter support. Policy errors always use the envelope `{ "error": "<code>", "message": "<message>" }`. Clients must branch on the exact HTTP status and `error` code below; decoder and database detail in `message` is not stable.
 
@@ -2854,7 +2653,7 @@ The Management capability `credential_concurrency_limits_v2` declares policy and
 
 The `credential_in_flight_snapshots` capability is independent from `credential_concurrency_limits_v2`. The latter declares Management concurrency policy and authoritative counter support. `credential_in_flight_snapshot_cursor` independently declares the database-backed stable pagination contract for `GET /credentials/in-flight`. Snapshot availability, freshness, barrier acknowledgement, staging, overflow, and cleanup never participate in admission or release. Observation failures are best effort and do not gate traffic.
 
-The observation configuration is database-backed for Home-managed CPA nodes. `credential-in-flight.snapshot-interval` defaults to `2s`; `stale-after` defaults to `10s` and must be at least three snapshot intervals; `max-part-bytes`, `max-part-count`, `max-revision-bytes`, `max-aggregate-groups`, `max-details`, and `max-string-bytes` default to `262144`, `64`, `16777216`, `100000`, `10000`, and `256`; `staging-retention` defaults to `1m`. Cleanup uses Home database time. Closed lifetimes are removed with their exact fingerprint and `membership_connected_at`; stale staging never removes an active or canceling lifetime's watermark or highest-revision parts.
+The observation configuration is database-backed for Home-managed CPA nodes. `credentials.in-flight.snapshot-interval` defaults to `2s`; `stale-after` defaults to `10s` and must be at least three snapshot intervals; `max-part-bytes`, `max-part-count`, `max-revision-bytes`, `max-aggregate-groups`, `max-details`, and `max-string-bytes` default to `262144`, `64`, `16777216`, `100000`, `10000`, and `256`; `staging-retention` defaults to `1m`. Cleanup uses Home database time. Closed lifetimes are removed with their exact fingerprint and `membership_connected_at`; stale staging never removes an active or canceling lifetime's watermark or highest-revision parts.
 
 Request details are limited to the documented fields. Headers, bodies, credentials, API keys, tokens, and certificate material are prohibited.
 
@@ -2868,7 +2667,7 @@ Response fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `capabilities.usage` | boolean | Whether the legacy `GET /api-key-usage` capability is available. |
+| `capabilities.usage` | boolean | Whether the legacy `GET /observability/usage/api-keys` capability is available. |
 | `capabilities.quota_snapshots` | boolean | Whether the DB-backed `GET /quota/credentials` snapshot list is available. |
 | `capabilities.quota_snapshot_details` | boolean | Whether `GET /quota/credentials/:credential_id` is available. |
 | `capabilities.quota_recollect` | boolean | Whether `POST /quota/collect` on-demand collection is available. |
@@ -3226,7 +3025,7 @@ Query parameters:
 | `search` | string | none | Fuzzy search across request ID, provider, model, endpoint, Home IP, CPA node ID/IP/label, username, masked key, and credential label. |
 | `status` | string | none | `success` or `failed`. |
 | `status_code` | integer | none | HTTP/failure status code. 2xx/3xx values match successful requests; other values match `fail_status_code`. |
-| `request_id` | string | none | Exact request ID filter. |
+| `request_id` | string | none | An 8-character value filters by literal request ID suffix; other lengths match exactly. Returns every matching record with its full `request_id`; `%` and `_` are not wildcards. |
 | `session_id` / `parent_session_id` / `root_session_id` | string | none | Session hierarchy filter for turn, parent task, or root workflow. Matches both raw identifiers and canonical UUIDv8 projections. |
 | `event_type` | string | none | Normalized event type filter. Common values include `completion`, `response`, `message`, `embedding`, and `stream`. |
 | `cpa_node` | string | none | Fuzzy filter across structured CPA node ID, CPA IP, CPA label, and CPA port. |
@@ -3262,7 +3061,7 @@ Query parameters:
 | --- | --- | --- | --- |
 | `session_id` / `root_session_id` / `request_id` / `id` | string | none | The identifier to look up (supports raw names, prefixed IDs, or canonical UUIDv8). If a `request_id`, `id`, or subagent `session_id` is supplied, the endpoint resolves the root session and returns the full hierarchy. |
 
-The response contains `root_session_id`, `total_sessions`, `total_requests`, `total_tokens`, and `tree[]`. Each tree node includes aggregated token metrics, first/last seen timestamps, failure counts, child sessions (`children[]`), and request turns (`timeline[]`).
+The response contains `root_session_id`, `total_sessions`, `total_requests`, `total_tokens`, and `tree[]`. Each tree node includes aggregated token metrics, first/last seen timestamps, failure counts, optional subagent node metadata (`node_kind`, `is_fork`, `is_compaction`), child sessions (`children[]`), and request turns (`timeline[]`).
 
 ### GET `/usage/aggregates`
 
@@ -3273,7 +3072,7 @@ Query parameters:
 | Query | Type | Default | Description |
 | --- | --- | --- | --- |
 | `group_by` | string | required | `user`, `client_key`, `credential`, `provider`, `model`, `endpoint`, `home_ip`, `executor_type`, or `status_code`. |
-| `metric` | string | `request_count` | `request_count`、`total_tokens`、`total_amount`、`failed_count`、`avg_latency_ms`、`p95_latency_ms`。 |
+| `metric` | string | `request_count` | `request_count`, `total_tokens`, `total_amount`, `failed_count`, `avg_latency_ms`, or `p95_latency_ms`. |
 | `direction` | string | `desc` | `desc` or `asc`. |
 | `limit` | integer | `20` | Maximum `100`. |
 | `offset` | integer | `0` | Page offset. |
@@ -3297,7 +3096,7 @@ Export fields are flattened redacted summaries. In addition to core record respo
 
 ### GET `/request-events`
 
-Returns the request event list for the management UI. This endpoint is DB-backed and read-only. It reads persisted usage observability records and does not read or consume `/usage-queue`.
+Returns the request event list for the management UI. This endpoint is DB-backed and read-only. It reads persisted usage observability records and does not read or consume `/observability/usage/queue`.
 
 Query parameters:
 
@@ -3307,7 +3106,7 @@ Query parameters:
 | `limit` / `offset` | integer | `50` / `0` | Server-side pagination. `limit` is capped at `200`. |
 | `sort` | string | `timestamp_desc` | Supports `timestamp_desc`, `timestamp_asc`, `latency_desc`, `latency_asc`, `tokens_desc`, `tokens_asc`, `cost_desc`, `cost_asc`, and `failed_first`. |
 | `search` | string | none | Fuzzy search across request ID, provider, model, endpoint, Home IP, CPA node ID/IP/label, username, masked key, and credential label. |
-| `request_id` | string | none | Exact request ID filter. |
+| `request_id` | string | none | An 8-character value filters by literal request ID suffix; other lengths match exactly. Matching requests remain separate records with full IDs, including when their final 8 characters are identical. |
 | `session_id` / `parent_session_id` / `root_session_id` | string | none | Session hierarchy filter for turn, parent task, or root workflow. Matches both raw identifiers and canonical UUIDv8 projections. |
 | `event_type` | string | none | Event type filter. The value is parsed from `event_type`/`type` payload fields or derived from the endpoint. Common values are `completion`, `response`, `message`, `embedding`, and `stream`. |
 | `status` / `status_code` | string / integer | none | `success`, `failed`, or status code filter. |
@@ -3381,7 +3180,7 @@ Query parameters:
 | --- | --- | --- | --- |
 | `window_seconds` | integer | `900` | Statistics window. |
 | `bucket_seconds` | integer | `60` | Velocity bucket size. |
-| `group_by` | string | `model` | `model`、`provider`、`client_key`、`credential`。 |
+| `group_by` | string | `model` | `model`, `provider`, `client_key`, or `credential`. |
 
 Aggregate range parameters are also supported. The response contains `velocity`, `latency_distribution`, and `current_usage` grouped by `group_by`.
 
@@ -3403,7 +3202,7 @@ Query parameters:
 
 | Query | Type | Default | Description |
 | --- | --- | --- | --- |
-| `request_id` | string | none | Request ID filter. |
+| `request_id` | string | none | An 8-character value filters by literal request ID suffix; other lengths match exactly. Select a candidate by its full `request_id` before downloading its log. |
 | `home_ip` | string | none | Home node filter. |
 | `from` / `to` | string | none | Time range. |
 | `provider` / `model` | string | none | Provider/model filter. |
@@ -3411,9 +3210,9 @@ Query parameters:
 | `limit` / `offset` | integer | `50` / `0` | Pagination. |
 | `search` | string | none | DB-side fuzzy search across request ID, model, provider, and status. Numeric timestamps or `.log` file name searches are matched against local file names within at most `10000` base records. |
 
-`items[]` contains `id`, `request_id`, `timestamp`, `home_ip`, `home_port`, `file_name`, `size_bytes`, `available`, `provider`, `model`, `status`, and `download_url`. Local files return exact availability, file name, and size. Remote records return `available=true` and a non-empty `download_url` when cluster forwarding is configured; `file_name` and `size_bytes` can be `null` because the current Home does not inspect the remote filesystem. Actual downloads use `GET /request-log-by-id/:id`, and generated URLs include both `home_ip` and `home_port` when available. The download remains authoritative and can return `404` if a remote file was deleted or `502` if the target Home is unavailable.
+`items[]` contains `id`, `request_id`, `timestamp`, `home_ip`, `home_port`, `file_name`, `size_bytes`, `available`, `provider`, `model`, `status`, and `download_url`. Local files return exact availability, file name, and size. Remote records return `available=true` and a non-empty `download_url` when cluster forwarding is configured; `file_name` and `size_bytes` can be `null` because the current Home does not inspect the remote filesystem. Actual downloads use `GET /observability/logs/requests/:id`, and generated URLs include both `home_ip` and `home_port` when available. The download remains authoritative and can return `404` if a remote file was deleted or `502` if the target Home is unavailable.
 
-### GET `/usage-queue`
+### GET `/observability/usage/queue`
 
 Pops the oldest queued usage records.
 
@@ -3437,9 +3236,11 @@ Example response:
 ]
 ```
 
-### GET `/logs`
+### GET `/observability/logs`
 
 Returns application log records from the database `log` table.
+
+Each returned `request_id` is the final 8 characters of the stored ID (shorter IDs are unchanged), so existing runtime-log interfaces display the short ID without frontend changes. The database and usage APIs retain the full request ID. Different log records may share the same display ID; use each record's `id` as its row identity.
 
 Query parameters:
 
@@ -3447,7 +3248,7 @@ Query parameters:
 | --- | --- | --- |
 | `home_ip` | string | Optional Home node IP filter. |
 | `client_ip` | string | Optional CPA client IP filter. |
-| `request_id` | string | Optional request ID filter. |
+| `request_id` | string | Optional request ID filter against stored IDs. An 8-character value matches the literal suffix; other lengths match exactly. Returns all matching log records with short display IDs; `%` and `_` are not wildcards. |
 | `level` | string | Optional log level filter. |
 | `after` | integer or RFC3339 | Optional timestamp lower bound. |
 | `before` | integer or RFC3339 | Optional timestamp upper bound. |
@@ -3476,7 +3277,7 @@ Example response:
 }
 ```
 
-### DELETE `/logs`
+### DELETE `/observability/logs`
 
 Deletes all application log records from the shared database `log` table. In a cluster deployment, this clears records for every Home and CPA node; it does not delete or truncate local log files. The `removed` response field is the number of deleted database rows.
 
@@ -3492,7 +3293,7 @@ Example response:
 }
 ```
 
-### GET `/request-error-logs`
+### GET `/observability/logs/errors`
 
 Lists `error-*.log` files when detailed request logging is disabled. Returns an empty list when detailed request logging is enabled.
 
@@ -3512,7 +3313,7 @@ Example response:
 }
 ```
 
-### GET `/request-error-logs/:name`
+### GET `/observability/logs/errors/:name`
 
 Downloads a request error log file.
 
@@ -3524,15 +3325,17 @@ Path parameters:
 
 Response: file attachment.
 
-### GET `/request-log-by-id/:id`
+### GET `/observability/logs/requests/:id`
 
 Downloads a Home request log file from that Home's local `logs` directory. `home_ip` identifies which Home owns the file, and optional `home_port` disambiguates Home nodes that share the same IP. When the target is not the current Home, the current Home forwards the request to the target Home over an internal mTLS-only cluster route. Files are matched by request ID, and the file system remains the source of truth, so deleted files return `404`.
+
+Storage and usage correlation retain the full request ID. Downloads use `<id>.log` as the literal filename suffix for both full IDs and short display IDs. When multiple files match, Home returns the file with the most recent modification time.
 
 Path parameters:
 
 | Path | Type | Description |
 | --- | --- | --- |
-| `id` | string | Request ID; slashes are rejected. |
+| `id` | string | Full stored request ID or an 8-character display ID; slashes are rejected. |
 
 Query parameters:
 
@@ -3613,7 +3416,9 @@ Example static response:
 }
 ```
 
-### GET `/model-definitions/:channel`
+Available model metadata reflects configured `display-name`, positive `max-context-length`, and explicit `thinking` values after credential persistence. OpenAI-compatible models also publish configured input/output modalities and use type `openai-image` when `image` is true. OAuth alias `display-name` overrides are reflected in runtime catalog entries. Thinking levels are normalized, and operational model JSON keeps `zero_allowed` / `dynamic_allowed`; it does not use the config tree's hyphenated field names. Static queries still describe the built-in catalog rather than per-credential overrides.
+
+### GET `/routing/model-definitions/:channel`
 
 Returns static model metadata for one channel.
 Returned model entries include the same authoritative `providers` field described above.
@@ -3631,17 +3436,21 @@ codex-team
 codex-plus
 codex-pro
 kimi
+kimi-ai
 antigravity
 xai
 x-ai
 grok
+devin
+meta
+muse
 ```
 
 Path or query parameters:
 
 | Path/query | Type | Required | Description |
 | --- | --- | --- | --- |
-| `channel` | string | yes | Channel name. `x-ai` and `grok` are aliases for `xai`. |
+| `channel` | string | yes | Channel name. `x-ai` and `grok` are aliases for `xai`; `muse` aliases `meta`. `kimi-ai` uses the Kimi catalog with its own provider identity. |
 
 Example response:
 
@@ -4038,7 +3847,623 @@ Response:
 
 ## OAuth Model Rules
 
-### `/oauth-excluded-models`
+### `/config/oauth/excluded-models`
+
+`GET` returns the provider-keyed object directly. `PUT` replaces the whole object; `PATCH` merges providers while replacing each submitted provider list. Both use this body shape:
+
+```json
+{ "claude": ["claude-opus-4.5"], "codex": ["*-preview"] }
+```
+
+`PUT /config/oauth/excluded-models/claude` accepts a raw string array. `DELETE /config/oauth/excluded-models/claude` removes only that provider; deleting `/config/oauth/excluded-models` removes the whole map. These rules apply to OAuth/file credentials; upstream API-key groups use their own `excluded-models`.
+
+### `/config/oauth/model-alias`
+
+`GET` returns the channel-keyed object directly. `PUT` replaces the whole object; `PATCH` merges channels and replaces submitted channel arrays:
+
+```json
+{
+  "claude": [
+    {
+      "name": "claude-sonnet-4",
+      "alias": "sonnet",
+      "display-name": "Team Sonnet",
+      "fork": true,
+      "force-mapping": true
+    }
+  ]
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | Upstream model identifier. |
+| `alias` | string | Client-facing model identifier. |
+| `display-name` | string | Optional trimmed catalog label; empty preserves the upstream display name. |
+| `fork` | boolean | Keeps the original model available as well as the alias. |
+| `force-mapping` | boolean | Uses the mapped upstream name in response model fields. |
+
+To edit one channel, use `/config/oauth/model-alias/claude` with a raw alias array. To remove it, use `DELETE` on that path. v8 does not use the v0 `items`, `channel`, `provider`, or `aliases` wrappers. Writes return `{"status":"ok","config-version":8}`. As elsewhere in the config tree, `null` is retained rather than interpreted as deletion.
+
+## Config Field Reference
+
+The following paths use the v8 config layout. `/config` and `/config.yaml` support both settings and upstream provider credentials; OAuth auth files use `/credentials`. Client access keys are managed through `/access/api-keys`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `server.host` | string | Service bind host/interface. |
+| `server.port` | integer | CPA service listen port distributed by Home; defaults to `8317` when omitted. |
+| `server.allow-host` | array of string | RESP client IP allowlist. Empty list allows all hosts. |
+| `server.tls.enable` | boolean | Enable HTTPS. |
+| `server.tls.cert` | string | TLS certificate path. |
+| `server.tls.key` | string | TLS private key path. |
+| `server.trusted-proxies` | array of string | Explicit reverse-proxy IP/CIDR allowlist used for forwarded client addresses. Empty trusts none; trust-all networks are rejected; restart after changes. |
+| `management.allow-remote` | boolean | Allows non-localhost Management API requests when true. |
+| `management.secret-key` | string | Management key. In local config mode, plaintext is hashed at startup. |
+| `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
+| `management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
+| `management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
+| `user-email.enabled` | boolean | Enables verified-email registration and password recovery when all mail settings are valid. |
+| `user-email.public-user-url` | string | Absolute public user-panel URL used in verify/reset links; production requires HTTPS. |
+| `user-email.from-address` | string | SMTP envelope/header mailbox without a display name. |
+| `user-email.from-name` | string | Optional safe display name for user email. |
+| `user-email.sender.type` | string | Mail sender type; currently only `smtp`. |
+| `user-email.sender.smtp.host` | string | SMTP host. Non-loopback hosts require STARTTLS. |
+| `user-email.sender.smtp.port` | integer | SMTP port; implicit TLS port `465` is unsupported. |
+| `user-email.sender.smtp.username` | string | Optional SMTP username. |
+| `user-email.sender.smtp.password-env` | string | Environment variable containing the SMTP password; the secret is not stored in config. |
+| `user-email.sender.smtp.starttls` | boolean | Requires STARTTLS with TLS 1.2 or newer. |
+| `user-email.verification-token-ttl` | string | Positive Go duration for verification tokens. |
+| `user-email.reset-token-ttl` | string | Positive Go duration for password-reset tokens. |
+| `oauth.auth-dir` | string | Import/export auth directory; not a Home runtime storage backend. |
+| `requests.proxy-url` | string | Global outbound proxy URL. |
+| `multimedia.disable-image-generation` | boolean or `"chat"` / `"passthrough"` | `false` enables image generation; `true` disables it globally; `"chat"` disables image generation on non-image endpoints; `"passthrough"` neither injects nor strips `image_generation` there, while keeping dedicated image endpoints enabled. |
+| `routing.force-model-prefix` | boolean | Requires explicit model prefixes for prefixed credentials. |
+| `observability.logs.request-log` | boolean | Enables detailed request logging. |
+| `access.api-keys` | array of string | String-list projection of the live client-key table; replacement removes omitted keys. Use `/access/api-keys` for ownership, groups, and limits. |
+| `requests.passthrough-headers` | boolean | Passes upstream response headers to downstream clients. |
+| `requests.streaming.keepalive-seconds` | integer | SSE heartbeat interval in seconds; `<=0` disables it. |
+| `requests.streaming.bootstrap-retries` | integer | Streaming retries before first byte; `<=0` disables it. |
+| `requests.nonstream-keepalive-interval` | integer | Blank-line keepalive interval for non-streaming responses. |
+| `observability.logs.debug` | boolean | Enables debug logging/features. |
+| `observability.pprof.enable` | boolean | Enables pprof server. |
+| `observability.pprof.addr` | string | pprof listen address. |
+| `server.commercial-mode` | boolean | Reduces high-overhead middleware behavior under high concurrency. |
+| `observability.logs.logging-to-file` | boolean | Writes app logs to files instead of stdout. |
+| `observability.logs.logs-max-total-size-mb` | integer | Total log file size limit in MB; `0` disables cleanup. |
+| `observability.logs.error-logs-max-files` | integer | Retained request error log file count. |
+| `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
+| `plugins.dir` | string | Local plugin artifact directory used by each node. |
+| `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
+| `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
+| `observability.usage.usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home normalizes this to `true` in v8 writes and in downstream CPA configuration. |
+| `observability.usage.redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |
+| `routing.cooldown.disable-cooling` | boolean | Globally disables Home request-error and quota cooldown scheduling (402/403/404, 408/500/502/503/504, and model-level 429) only when a credential/provider does not explicitly set the same field. An explicit credential/provider `true` or `false` takes precedence. HTTP 401 and model-not-supported recovery remain unchanged. This Home-local value is persisted and applied on reload; config sent to downstream CPA nodes is independently forced to `true`. |
+| `oauth.auth-auto-refresh-workers` | integer | Overrides auth auto-refresh worker count. |
+| `routing.retry.request-retry` | integer | Used by the CPA execution layer: additional retry rounds after the first credential round is exhausted on HTTP 403, 408, 429, 500, 502, 503, or 504. Round `0` is the initial round; additional round `r` only admits credentials whose effective `request-retry` is at least `r`. An explicit non-negative credential/provider override takes precedence; an omitted or negative override inherits this global value, and explicit `0` admits only round `0`. Home returns `request_retry` as the maximum applicable value for the current candidate set, which is only the CPA request-level outer limit; Home applies the per-credential round filter separately. New CPA-to-Home RESP payloads carry an explicit `retry_round: 0` in the initial round, increment it for additional rounds, and exclude credentials already tried in the current round; legacy payloads without these fields retain the count-based cap for compatibility. |
+| `routing.retry.max-retry-credentials` | integer | Maximum different credentials tried in each credential retry round after round filtering; `<=0` means all available credentials in that round. Credentials skipped by this cap still age according to their effective retry window, so this setting does not guarantee that every credential receives the configured number of actual attempts. |
+| `routing.retry.max-retry-interval` | integer | Maximum remaining cooldown in seconds that CPA may wait before starting a new credential retry round. A round waits only when at least one eligible credential will recover within this threshold; credentials with a longer remaining cooldown do not trigger it. `<=0` permits only rounds that can start immediately without a cooldown wait. |
+| `quota-exceeded.switch-project` | boolean | Switches Gemini project on quota errors. |
+| `quota-exceeded.switch-preview-model` | boolean | Switches to preview model on quota errors. |
+| `oauth.providers.antigravity.antigravity-credits` | boolean | Uses Antigravity credits as last-resort Claude fallback. |
+| `routing.strategy` | string | `round-robin`, `weighted-round-robin`, or `fill-first`. |
+| `routing.session-affinity` | boolean | Universal session-sticky credential routing. |
+| `routing.session-affinity-ttl` | string | Session-to-auth binding duration. |
+| `oauth.providers.antigravity.signature-cache-enabled` | boolean pointer | Enables Antigravity thinking signature cache validation. |
+| `oauth.providers.antigravity.signature-bypass-strict` | boolean pointer | Controls strictness of Antigravity signature bypass. |
+| `oauth.providers.antigravity.sensitive-words` | array of string | Words to obfuscate with zero-width characters in system instructions. |
+| `api-keys.gemini` | array of groups | Upstream gemini groups with `keys`; see the provider configuration section. |
+| `api-keys.interactions` | array of groups | Upstream interactions groups with `keys`; see the provider configuration section. |
+| `api-keys.codex` | array of groups | Upstream codex groups with `keys`; see the provider configuration section. |
+| `api-keys.codex[].models[].support-configuration-update` | boolean | Enables Responses `configuration_update` for this configured model only; defaults to `false`. |
+| `api-keys.xai` | array of groups | Upstream xai groups with `keys`; see the provider configuration section. |
+| `api-keys.meta` | array of groups | Upstream meta groups with `keys`; see the provider configuration section. |
+| `oauth.providers.codex.header-defaults.user-agent` | string | Default Codex User-Agent. |
+| `oauth.providers.codex.header-defaults.beta-features` | string | Default Codex websocket beta features header. |
+| `api-keys.claude` | array of groups | Upstream claude groups with `keys`; see the provider configuration section. |
+| `oauth.providers.claude.header-defaults.user-agent` | string | Default Claude User-Agent. |
+| `oauth.providers.claude.header-defaults.package-version` | string | Default Claude package version. |
+| `oauth.providers.claude.header-defaults.runtime-version` | string | Default Claude runtime version. |
+| `oauth.providers.claude.header-defaults.os` | string | Default Claude OS fingerprint. |
+| `oauth.providers.claude.header-defaults.arch` | string | Default Claude architecture fingerprint. |
+| `oauth.providers.claude.header-defaults.timeout` | string | Default Claude timeout header. |
+| `oauth.providers.claude.header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
+| `api-keys.openai-compatibility` | array of groups | Upstream openai-compatibility groups with `keys`; see the provider configuration section. |
+| `api-keys.vertex` | array of groups | Upstream vertex groups with `keys`; see the provider configuration section. |
+| `oauth.excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
+| `oauth.model-alias` | object string to array of `OAuthModelAlias` | Per-channel OAuth model aliases. |
+| `oauth.model-alias.*[].force-mapping` | boolean | When true, response model fields use the mapped upstream model name. |
+| `requests.payload.default` | array of `PayloadRule` | Sets missing JSON payload params. |
+| `requests.payload.default-raw` | array of `PayloadRule` | Sets missing raw JSON payload params. |
+| `requests.payload.override` | array of `PayloadRule` | Overrides JSON payload params. |
+| `requests.payload.override-raw` | array of `PayloadRule` | Overrides raw JSON payload params. |
+| `requests.payload.filter` | array of `PayloadFilterRule` | Removes JSON payload paths. |
+
+### Additional v8 Fields
+
+These fields supplement the reference above. Settings under `oauth.providers` apply to OAuth credentials; API-key options are documented in the upstream group schema.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `config-version` | integer | Canonical layout version `8`. |
+| `management.base-url` | string | Optional public management base URL. |
+| `server.discovery.enabled` | boolean | Enables CPA mDNS advertising; default `false`. |
+| `server.discovery.service-name` | string | Optional DNS-SD instance name. |
+| `server.discovery.service-type` | string | DNS-SD service type; default `_ai-gateway._tcp`. |
+| `server.discovery.subtypes` | string array | Advertised API protocol subtypes. |
+| `server.discovery.interfaces.include` / `exclude` | string array | Network-interface filters. |
+| `server.discovery.auth-required` | optional boolean | Advertised client-auth requirement; defaults to `true`. |
+| `server.discovery.advertise-management` | boolean | Advertises management endpoints; defaults to `false`. |
+| `credentials.concurrency` | object | Home-owned limiter lifecycle and release tuning. Revision fields are read-only; see the configuration section. |
+| `credentials.in-flight` | object | Observation snapshot, staleness, size, and staging limits. |
+| `routing.session-affinity-subagents` | optional boolean | CPA compatibility option for parent-session credential inheritance; Home continues to manage its own session hierarchy. |
+| `routing.cooldown.save-cooldown-status` | boolean | CPA compatibility setting; Home runtime cooldown state is DB-backed. |
+| `routing.cooldown.transient-error-cooldown-seconds` | integer | CPA transient-error cooldown setting carried with configuration. |
+| `oauth.providers.aistudio.ws-auth` | boolean | Home normalizes this to `false`. |
+| `oauth.request-scoped-errors` | provider-to-rule-array object | OAuth request-scoped error overrides. |
+| `oauth.providers.codex.disable-codex-cloaking` | boolean | Disables forcing official identity headers for Codex OAuth. |
+| `oauth.providers.codex.stream-bootstrap-buffering` | boolean | Buffers pre-generation frames to allow failover before committing a stream; default `false`. |
+| `oauth.providers.codex.stream-bootstrap-timeout` | duration string | Optional time ceiling for bootstrap buffering; `0` keeps only frame/byte bounds. |
+| `oauth.providers.codex.optimize-multi-agent-v2` | boolean | Optimizes official Codex multi-agent requests. |
+| `oauth.providers.codex.orphan-delegation-compatibility` | boolean | Enables compatibility for orphan delegation outputs. |
+| `oauth.providers.codex.model-level-cooling` | boolean | Scopes Codex quota cooldown to a model. |
+| `oauth.providers.codex.response-steering` | boolean | Enables full-duplex Codex WebSocket response steering. |
+| `oauth.providers.codex.live-media-relay.enabled` | boolean | Enables the Codex Live WebRTC relay. |
+| `oauth.providers.codex.live-media-relay.max-sessions` | integer | Relay session limit. |
+| `oauth.providers.codex.live-media-relay.disable-private-remote-ips` | boolean | Rejects private remote media addresses when enabled. |
+| `oauth.providers.codex.live-media-relay.public-ip` | string | Advertised relay address. |
+| `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | Relay UDP port range. |
+| `oauth.providers.codex.live-media-relay.ice-servers` | object array | Each entry has `urls` and optional `username` / `credential`; JSON reads redact the latter two. |
+| `oauth.providers.claude.model-level-cooling` | boolean | Scopes Claude quota cooldown to a model. |
+| `oauth.providers.claude.disable-claude-cloak-mode` | boolean | Disables Claude OAuth cloaking. |
+| `oauth.providers.claude.claude-code.disable-cloaking-model-list` | boolean | Disables model-ID cloaking in Anthropic model-list responses. |
+| `oauth.providers.claude.header-defaults.timezone` | string | Additional Claude header fingerprint default. |
+| `oauth.providers.antigravity.connection-pool.enabled` | optional boolean | Enables upstream pooling; default `false`. |
+| `oauth.providers.antigravity.connection-pool.idle-conn-timeout` | duration string | Idle timeout, default `30s`, capped at `210s`. |
+| `oauth.providers.antigravity.connection-pool.max-idle-conns-per-host` | optional integer | Idle connections per host per credential; default `2`. |
+| `oauth.providers.xai.inject-x-search` | boolean | Injects native `x_search` when absent from the request. |
+| `oauth.providers.devin.sensitive-words` | string array | Words obfuscated in system prompts/messages. |
+| `oauth.model-alias.*[].display-name` | string | Optional catalog display-name override. |
+| `multimedia.gpt-image-2-base-model` | string | Base model used for GPT Image 2 requests. |
+| `multimedia.video-result-auth-cache-ttl` | duration string | Video-result credential association lifetime. |
+| `plugins.auth-revision` | integer | Home-owned plugin-store auth revision; read-only. |
+
+`multimedia.disable-image-generation` accepts `false`, `true`, `"chat"`, or `"passthrough"`. `"chat"` removes/disables image generation on non-image routes while keeping dedicated image routes available; `"passthrough"` leaves client-supplied `image_generation` unchanged and does not inject it on non-image routes.
+
+Removed v8 fields: `codex.identity-confuse` / `oauth.providers.codex.identity-confuse` and `routing.claude-code-session-affinity` are rejected by v8 writes. Migration removes identity-confuse and maps the old affinity flag to `routing.session-affinity`, preserving an enabled value when either old or current flag was true. The old `codex.live-media-relay.allow-private-remote-ips` setting migrates to the inverse `disable-private-remote-ips`; an explicit canonical value takes precedence.
+
+Payload nested structure:
+
+```json
+{
+  "PayloadRule": {
+    "models": [
+      { "name": "gpt-*", "protocol": "responses" }
+    ],
+    "params": {
+      "reasoning.effort": "high"
+    }
+  },
+  "PayloadFilterRule": {
+    "models": [
+      { "name": "gpt-*", "protocol": "responses" }
+    ],
+    "params": ["metadata.debug"]
+  },
+  "PayloadModelRule": {
+    "name": "model pattern or wildcard",
+    "protocol": "translator protocol",
+    "from-protocol": "source protocol",
+    "headers": {
+      "Header-Name": "wildcard value"
+    },
+    "match": [
+      { "json.path": "required value" }
+    ],
+    "not-match": [
+      { "json.path": "disallowed value" }
+    ],
+    "exist": ["json.path"],
+    "not-exist": ["json.path"]
+  }
+}
+```
+
+`PayloadModelRule` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Target model name or wildcard pattern. |
+| `protocol` | string | Current translator protocol/provider format matcher, such as `openai`, `responses`, `gemini`, `claude`, `codex`, or `antigravity`. |
+| `from-protocol` | string | Source protocol matcher used when a request was translated from another protocol. |
+| `headers` | object string to string | Request header matchers. Every configured header must be present and its value must match the configured wildcard pattern. |
+| `match` | array of object | Payload JSON path/value conditions that must match. Paths use the same gjson/sjson-style path syntax as payload params. |
+| `not-match` | array of object | Payload JSON path/value conditions that must not match. |
+| `exist` | array of string | Payload JSON paths that must exist and not be `null`. |
+| `not-exist` | array of string | Payload JSON paths that must be missing or `null`. |
+
+## v0 Compatibility and Migration
+
+The tables in this appendix compare paths relative to `/v0/management` and `/v8/management`. Existing operational resources share their handlers and response shapes unless the v8 sections above say otherwise. Home resources such as `/nodes`, `/topology`, `/users`, `/capabilities`, `/credentials/*` concurrency operations, `/quota/*`, `/usage/*`, `/request-events`, `/request-logs`, `/billing/*`, `/proxy/*`, model/channel groups, `/models`, and `/plugin-store-auth` keep their names under v8. `/user` and plugin asset URLs are not renamed.
+
+### Operational Route Mapping
+
+| v0 | v8 |
+| --- | --- |
+| `/api-call` | `/requests/api-call` |
+| `/api-key-usage` | `/observability/usage/api-keys` |
+| `/api-keys` | `/access/api-keys` |
+| `/auth-files` | `/credentials` |
+| `/auth-files/download` | `/credentials/download` |
+| `/auth-files/fields` | `/credentials/fields` |
+| `/auth-files/models` | `/credentials/models` |
+| `/auth-files/status` | `/credentials/status` |
+| `/get-auth-status` | `/oauth/status` |
+| `/latest-version` | `/server/latest-version` |
+| `/logs` | `/observability/logs` |
+| `/model-definitions/:channel` | `/routing/model-definitions/:channel` |
+| `/oauth-callback` | `/oauth/callback` |
+| `/plugin-store` | `/plugins/store` |
+| `/plugin-store/:id/install` | `/plugins/store/:id/install` |
+| `/plugin-store/:id/uninstall` | `/plugins/store/:id/uninstall` |
+| `/plugins` | `/plugins` |
+| `/request-error-logs` | `/observability/logs/errors` |
+| `/request-error-logs/:name` | `/observability/logs/errors/:name` |
+| `/request-log-by-id/:id` | `/observability/logs/requests/:id` |
+| `/usage-queue` | `/observability/usage/queue` |
+| `/vertex/import` | `/oauth/import?provider=vertex` |
+
+| v0 OAuth start | v8 OAuth start |
+| --- | --- |
+| `/anthropic-auth-url` | `/oauth/auth-url?provider=claude` |
+| `/codex-auth-url` | `/oauth/auth-url?provider=codex` |
+| `/antigravity-auth-url` | `/oauth/auth-url?provider=antigravity` |
+| `/kimi-auth-url` | `/oauth/auth-url?provider=kimi` (or `kimi-ai` for that domain) |
+| `/xai-auth-url` | `/oauth/auth-url?provider=xai` |
+| `/devin-auth-url` | `/oauth/auth-url?provider=devin` |
+| `/meta-auth-url` | `/oauth/auth-url?provider=meta` |
+| `/<plugin-provider>-auth-url` | `/oauth/auth-url?provider=<plugin-provider>` |
+
+The v0 callback is an authenticated POST; v8 additionally accepts GET and validates state without the management key. `/credentials/refresh`, `/oauth/session`, `/routing/cooldown/reset`, credential/plugin quota operations, and `DELETE /plugins/:id` are registered explicitly in v8, not by copying all SDK v0 endpoints.
+
+### Configuration Layout Mapping
+
+Each row names a legacy config field/root and its canonical v8 tree location. JSON leaf writes use raw values, and tree reads return raw values. A v0 `{"value":true}` becomes `true` at the selected v8 leaf.
+
+| v0 | v8 |
+| --- | --- |
+| `allow-host` | `server.allow-host` |
+| `host` | `server.host` |
+| `port` | `server.port` |
+| `trusted-proxies` | `server.trusted-proxies` |
+| `tls` | `server.tls` |
+| `commercial-mode` | `server.commercial-mode` |
+| `discovery` | `server.discovery` |
+| `remote-management` | `management` |
+| `api-keys` | `access.api-keys` |
+| `credential-concurrency` | `credentials.concurrency` |
+| `credential-in-flight` | `credentials.in-flight` |
+| `force-model-prefix` | `routing.force-model-prefix` |
+| `request-retry` | `routing.retry.request-retry` |
+| `max-retry-credentials` | `routing.retry.max-retry-credentials` |
+| `max-retry-interval` | `routing.retry.max-retry-interval` |
+| `disable-cooling` | `routing.cooldown.disable-cooling` |
+| `save-cooldown-status` | `routing.cooldown.save-cooldown-status` |
+| `transient-error-cooldown-seconds` | `routing.cooldown.transient-error-cooldown-seconds` |
+| `proxy-url` | `requests.proxy-url` |
+| `passthrough-headers` | `requests.passthrough-headers` |
+| `nonstream-keepalive-interval` | `requests.nonstream-keepalive-interval` |
+| `streaming` | `requests.streaming` |
+| `payload` | `requests.payload` |
+| `auth-dir` | `oauth.auth-dir` |
+| `auth-auto-refresh-workers` | `oauth.auth-auto-refresh-workers` |
+| `oauth-model-alias` | `oauth.model-alias` |
+| `oauth-excluded-models` | `oauth.excluded-models` |
+| `oauth-request-scoped-errors` | `oauth.request-scoped-errors` |
+| `ws-auth` | `oauth.providers.aistudio.ws-auth` |
+| `codex` | `oauth.providers.codex` |
+| `codex-header-defaults` | `oauth.providers.codex.header-defaults` |
+| `claude` | `oauth.providers.claude` |
+| `claude-code` | `oauth.providers.claude.claude-code` |
+| `disable-claude-cloak-mode` | `oauth.providers.claude.disable-claude-cloak-mode` |
+| `claude-header-defaults` | `oauth.providers.claude.header-defaults` |
+| `antigravity` | `oauth.providers.antigravity` |
+| `antigravity-signature-cache-enabled` | `oauth.providers.antigravity.signature-cache-enabled` |
+| `antigravity-signature-bypass-strict` | `oauth.providers.antigravity.signature-bypass-strict` |
+| `quota-exceeded.antigravity-credits` | `oauth.providers.antigravity.antigravity-credits` |
+| `xai` | `oauth.providers.xai` |
+| `devin` | `oauth.providers.devin` |
+| `disable-image-generation` | `multimedia.disable-image-generation` |
+| `gpt-image-2-base-model` | `multimedia.gpt-image-2-base-model` |
+| `video-result-auth-cache-ttl` | `multimedia.video-result-auth-cache-ttl` |
+| `debug` | `observability.logs.debug` |
+| `logging-to-file` | `observability.logs.logging-to-file` |
+| `logs-max-total-size-mb` | `observability.logs.logs-max-total-size-mb` |
+| `request-log` | `observability.logs.request-log` |
+| `error-logs-max-files` | `observability.logs.error-logs-max-files` |
+| `usage-statistics-enabled` | `observability.usage.usage-statistics-enabled` |
+| `redis-usage-queue-retention-seconds` | `observability.usage.redis-usage-queue-retention-seconds` |
+| `pprof` | `observability.pprof` |
+| `gemini-api-key` | `api-keys.gemini` |
+| `interactions-api-key` | `api-keys.interactions` |
+| `vertex-api-key` | `api-keys.vertex` |
+| `codex-api-key` | `api-keys.codex` |
+| `claude-api-key` | `api-keys.claude` |
+| `xai-api-key` | `api-keys.xai` |
+| `meta-api-key` | `api-keys.meta` |
+| `openai-compatibility` | `api-keys.openai-compatibility` |
+
+`plugins`, `user-email`, the canonical session-affinity settings under `routing`, and `quota-exceeded.switch-project` / `switch-preview-model` retain their names. `quota-exceeded.antigravity-credits` moves into the Antigravity OAuth provider subtree. Upstream arrays become grouped `api-keys.<provider>` lists; compatibility `api-key-entries` becomes `keys`. The client-key string list moves from the legacy config array `api-keys` to `access.api-keys`; replacing it still reconciles the live key table. Rich key records use the `/access/api-keys` resource API.
+
+Startup/import parsing accepts legacy and mixed layouts. When both versions of a field exist, explicit v8 presence wins, including `false`, `0`, and empty collections. v8 writes require the canonical layout and reject legacy/unknown fields rather than silently accepting them. Use the v8 GET response to obtain a migrated tree, retain read-only revisions and credential IDs, then use subtree PATCH/PUT or a complete replacement.
+
+### Legacy Config Reads and Full YAML Replacement
+
+`GET /v0/management/config` still returns the legacy runtime JSON shape: top-level `proxy-url`, `request-retry`, provider arrays, and other legacy names. It does not become the v8 tree, and fields hidden by the runtime JSON schema remain hidden. `GET /v0/management/config.yaml` reconstructs the persisted snapshot with DB-backed credentials and can retain legacy roots/OAuth scope; use the v8 YAML route for the canonical migrated layout.
+
+`PUT /v0/management/config.yaml` accepts a full YAML document (including legacy/mixed layouts), replaces non-credential configuration, and reconciles only provider credential families explicitly present. Omitted provider families remain unchanged in v0; empty lists clear them. This differs from v8 full replacement. `auth-dir` remains an import/export path. Success returns `{"ok":true,"changed":["config"]}`, with `"auth"` also in `changed` when credential roots were supplied. Lifecycle restrictions still apply.
+
+The remaining appendix documents v0 leaf/config-root and provider-list mutation bodies for existing clients. These are not v8 request bodies. In particular, legacy root PATCH removes fields on `null`, while v8 config-tree PATCH retains `null`.
+
+### Legacy Provider Route Families
+
+The v0 provider routes `/v0/management/gemini-api-key`, `/v0/management/interactions-api-key`, `/v0/management/vertex-api-key`, `/v0/management/codex-api-key`, `/v0/management/claude-api-key`, `/v0/management/xai-api-key`, `/v0/management/meta-api-key`, and `/v0/management/openai-compatibility` retain GET/PUT/PATCH/DELETE. Their arrays use flat credential entries; compatibility entries use `api-key-entries`, not v8 `keys`. Model and credential options described above remain available where supported by the provider; legacy typed JSON uses `thinking.zero_allowed` / `dynamic_allowed`.
+
+### Simple Config Leaf Routes
+
+These routes write the corresponding config root into the cluster repository and reload the Home runtime.
+
+Port changes require a CPA restart: `PUT/PATCH /v0/management/port` persists and distributes the new value immediately, but an already running CPA does not rebind its listener until that CPA process is restarted.
+
+| Method | Path | Input | Output |
+| --- | --- | --- | --- |
+| `GET` | `/v0/management/port` | none | `{ "port": number }` |
+| `PUT/PATCH` | `/v0/management/port` | `{ "value": number }`; must be an integer from `1` to `65535`. | `{ "status": "ok" }` |
+| `GET` | `/v0/management/debug` | none | `{ "debug": boolean }` |
+| `PUT/PATCH` | `/v0/management/debug` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/logging-to-file` | none | `{ "logging-to-file": boolean }` |
+| `PUT/PATCH` | `/v0/management/logging-to-file` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/logs-max-total-size-mb` | none | `{ "logs-max-total-size-mb": number }` |
+| `PUT/PATCH` | `/v0/management/logs-max-total-size-mb` | `{ "value": number }`; negative values are saved as `0` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/error-logs-max-files` | none | `{ "error-logs-max-files": number }` |
+| `PUT/PATCH` | `/v0/management/error-logs-max-files` | `{ "value": number }`; negative values are saved as `10` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/usage-statistics-enabled` | none | `{ "usage-statistics-enabled": boolean }` |
+| `PUT/PATCH` | `/v0/management/usage-statistics-enabled` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/proxy-url` | none | `{ "proxy-url": string }` |
+| `PUT/PATCH` | `/v0/management/proxy-url` | `{ "value": string }` | `{ "status": "ok" }` |
+| `DELETE` | `/v0/management/proxy-url` | none | `{ "status": "ok" }` |
+| `GET` | `/v0/management/request-log` | none | `{ "request-log": boolean }` |
+| `PUT/PATCH` | `/v0/management/request-log` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/request-retry` | none | `{ "request-retry": number }` |
+| `PUT/PATCH` | `/v0/management/request-retry` | `{ "value": number }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/max-retry-credentials` | none | `{ "max-retry-credentials": number }` |
+| `PUT/PATCH` | `/v0/management/max-retry-credentials` | `{ "value": number }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/max-retry-interval` | none | `{ "max-retry-interval": number }` |
+| `PUT/PATCH` | `/v0/management/max-retry-interval` | `{ "value": number }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/force-model-prefix` | none | `{ "force-model-prefix": boolean }` |
+| `PUT/PATCH` | `/v0/management/force-model-prefix` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/routing/strategy` | none | `{ "strategy": "round-robin" }` or `{ "strategy": "fill-first" }` |
+| `PUT/PATCH` | `/v0/management/routing/strategy` | `{ "value": "round-robin" }`, `roundrobin`, `rr`, `weighted-round-robin`, `weightedroundrobin`, `wrr`, `fill-first`, `fillfirst`, or `ff` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/quota-exceeded/switch-project` | none | `{ "switch-project": boolean }` |
+| `PUT/PATCH` | `/v0/management/quota-exceeded/switch-project` | `{ "value": boolean }` | `{ "status": "ok" }` |
+| `GET` | `/v0/management/quota-exceeded/switch-preview-model` | none | `{ "switch-preview-model": boolean }` |
+| `PUT/PATCH` | `/v0/management/quota-exceeded/switch-preview-model` | `{ "value": boolean }` | `{ "status": "ok" }` |
+
+### `/v0/management/payload` Config Root
+
+`GET /v0/management/payload` returns:
+
+```json
+{
+  "payload": {
+    "default": [
+      {
+        "models": [
+          {
+            "name": "gpt-*",
+            "protocol": "responses",
+            "from-protocol": "openai",
+            "headers": {
+              "X-Client-Tier": "tenant-*"
+            },
+            "match": [{ "metadata.client": "codex" }],
+            "not-match": [{ "metadata.mode": "dev" }],
+            "exist": ["tools.#(type==\"web_search\").type"],
+            "not-exist": ["metadata.disable_payload"]
+          }
+        ],
+        "params": { "reasoning.effort": "high" }
+      }
+    ],
+    "default-raw": [],
+    "override": [],
+    "override-raw": [],
+    "filter": [
+      {
+        "models": [{ "name": "*", "protocol": "responses" }],
+        "params": ["metadata.debug"]
+      }
+    ]
+  }
+}
+```
+
+`GET /v0/management/payload` returns the complete persisted payload root, including advanced model matcher fields that older frontends may not recognize.
+
+`PUT /v0/management/payload` accepts either a raw payload object, `{ "value": <payload> }`, or `{ "payload": <payload> }`. It replaces the complete `payload` root and validates the full schema without dropping advanced matcher fields.
+
+`PATCH /v0/management/payload` accepts the same body shapes and applies object merge-patch semantics to the existing `payload` root: submitted object fields are merged recursively, `null` removes a field, arrays are replaced as whole values, and sibling fields not present in the patch are preserved. This lets clients update one section, such as `filter`, without deleting `default`, `override`, or advanced matcher fields.
+
+`DELETE /v0/management/payload` removes the root from the config snapshot.
+
+Successful writes return:
+
+```json
+{ "status": "ok" }
+```
+
+### `/v0/management/antigravity` Config Root
+
+`GET /v0/management/antigravity` returns:
+
+```json
+{
+  "antigravity": {
+    "sensitive-words": ["API", "proxy"]
+  }
+}
+```
+
+`GET /v0/management/antigravity` returns the persisted `antigravity` provider config root.
+
+`PUT /v0/management/antigravity` accepts a raw antigravity object, `{ "value": <antigravity> }`, or `{ "antigravity": <antigravity> }`. It replaces the complete `antigravity` root and validates its schema.
+
+`PATCH /v0/management/antigravity` accepts the same body shapes and applies object merge-patch semantics to the existing `antigravity` root: submitted object fields are merged recursively, `null` removes a field, and arrays are replaced as whole values.
+
+`DELETE /v0/management/antigravity` removes the root from the config snapshot.
+
+Successful writes return:
+
+```json
+{ "status": "ok" }
+```
+
+### Legacy Provider List Operations
+
+#### GET Provider Key Routes
+
+Input: none.
+
+Example response:
+
+```json
+{
+  "gemini-api-key": [
+    {
+      "auth_index": "auth-db-id",
+      "id": "auth-db-id",
+      "api-key": "AIza...",
+      "base-url": "https://generativelanguage.googleapis.com",
+      "prefix": "team-a",
+      "proxy-url": "",
+      "disabled": false,
+      "priority": 10,
+      "request-retry": 2,
+      "headers": { "X-Test": "1" },
+      "models": [
+        { "name": "gemini-upstream", "alias": "gemini-alias" }
+      ]
+    }
+  ]
+}
+```
+
+#### PUT Provider Key Routes
+
+Replaces the full list for the route provider.
+
+Input can be an array:
+
+```json
+[
+  {
+    "api-key": "provider-key",
+    "base-url": "https://api.example.com",
+    "models": [
+      { "name": "upstream-model", "alias": "alias-model" }
+    ]
+  }
+]
+```
+
+or a wrapper:
+
+```json
+{ "items": [ { "api-key": "provider-key" } ] }
+```
+
+Home also accepts `{ "<route-key>": [...] }`, `{ "list": [...] }`, `{ "data": [...] }`, or a single entry object.
+
+Successful response:
+
+```json
+{ "status": "ok" }
+```
+
+#### PATCH Provider Key Routes
+
+Updates one provider credential.
+
+Example request:
+
+```json
+{
+  "index": 0,
+  "match": "old-api-key",
+  "name": "openai-provider-name",
+  "value": {
+    "api-key": "new-api-key",
+    "base-url": "https://api.example.com",
+    "proxy-url": "",
+    "headers": { "X-Test": "1" },
+    "excluded-models": ["model-a"]
+  }
+}
+```
+
+Selector fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `index` | integer | Zero-based index in the filtered provider list. |
+| `match` | string | API-key value to match. |
+| `name` | string | OpenAI-compatible provider name or auth label. |
+| `id` | string | DB auth ID. |
+| `uuid` | string | Alias of `id`. |
+| query `base-url` | string | Optional base URL to narrow API-key matches. |
+
+`PATCH` does not use body `auth_index` as the DB ID selector. Use `id` or `uuid` for ID-based patching.
+
+Selectors that still match multiple credentials are rejected. Use `id`, `uuid`, or `index` to select one credential when routing fields such as `prefix`, `proxy-url`, or `headers` distinguish entries with the same API key and base URL.
+
+Within `value`, `disable-cooling` accepts a boolean override and `request-retry` accepts an integer additional-round override. Set either field to `null`, or set `request-retry` to a negative value, to clear its existing override and inherit the global setting; omitting a field leaves its current override unchanged.
+
+Successful response:
+
+```json
+{ "status": "ok" }
+```
+
+#### DELETE Provider Key Routes
+
+Deletes one provider credential.
+
+Query parameters:
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `id` | string | DB auth ID. |
+| `uuid` | string | Alias of `id`. |
+| `auth_index` | string | DB auth ID or runtime index. |
+| `index` | integer | Zero-based index in the filtered provider list. |
+| `api-key` | string | API-key value. |
+| `api_key` | string | Alias of `api-key`. |
+| `match` | string | Alias of `api-key`. |
+| `base-url` | string | Optional base URL to narrow API-key matches. |
+| `base_url` | string | Alias of `base-url`. |
+| `name` | string | Provider or compatibility name. |
+
+Selectors that still match multiple credentials are rejected. Use `id`, `uuid`, `auth_index`, or `index` to delete exactly one credential.
+
+Successful response:
+
+```json
+{ "status": "ok" }
+```
+
+### OAuth Model Rules
+
+#### `/v0/management/oauth-excluded-models`
 
 GET response:
 
@@ -4085,7 +4510,7 @@ DELETE query:
 
 Successful writes return `{ "status": "ok" }`.
 
-### `/oauth-model-alias`
+#### `/v0/management/oauth-model-alias`
 
 GET response:
 
@@ -4141,148 +4566,3 @@ DELETE query:
 | `provider` | string | conditionally | Alias of `channel`. |
 
 Successful writes return `{ "status": "ok" }`.
-
-## Config Field Reference
-
-These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-credential roots; use provider-key and auth-file routes for credential roots.
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `host` | string | Service bind host/interface. |
-| `port` | integer | CPA service listen port distributed by Home; defaults to `8317` when omitted. |
-| `allow-host` | array of string | RESP client IP allowlist. Empty list allows all hosts. |
-| `tls.enable` | boolean | Enable HTTPS. |
-| `tls.cert` | string | TLS certificate path. |
-| `tls.key` | string | TLS private key path. |
-| `trusted-proxies` | array of string | Explicit reverse-proxy IP/CIDR allowlist used for forwarded client addresses. Empty trusts none; trust-all networks are rejected; restart after changes. |
-| `remote-management.allow-remote` | boolean | Allows non-localhost Management API requests when true. |
-| `remote-management.secret-key` | string | Management key. In local config mode, plaintext is hashed at startup. |
-| `remote-management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
-| `remote-management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
-| `remote-management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
-| `user-email.enabled` | boolean | Enables verified-email registration and password recovery when all mail settings are valid. |
-| `user-email.public-user-url` | string | Absolute public user-panel URL used in verify/reset links; production requires HTTPS. |
-| `user-email.from-address` | string | SMTP envelope/header mailbox without a display name. |
-| `user-email.from-name` | string | Optional safe display name for user email. |
-| `user-email.sender.type` | string | Mail sender type; currently only `smtp`. |
-| `user-email.sender.smtp.host` | string | SMTP host. Non-loopback hosts require STARTTLS. |
-| `user-email.sender.smtp.port` | integer | SMTP port; implicit TLS port `465` is unsupported. |
-| `user-email.sender.smtp.username` | string | Optional SMTP username. |
-| `user-email.sender.smtp.password-env` | string | Environment variable containing the SMTP password; the secret is not stored in config. |
-| `user-email.sender.smtp.starttls` | boolean | Requires STARTTLS with TLS 1.2 or newer. |
-| `user-email.verification-token-ttl` | string | Positive Go duration for verification tokens. |
-| `user-email.reset-token-ttl` | string | Positive Go duration for password-reset tokens. |
-| `auth-dir` | string | Local auth token directory. |
-| `proxy-url` | string | Global outbound proxy URL. |
-| `disable-image-generation` | boolean or `"chat"` | `false` enables image generation; `true` disables it globally; `"chat"` disables injection for non-image endpoints. |
-| `force-model-prefix` | boolean | Requires explicit model prefixes for prefixed credentials. |
-| `request-log` | boolean | Enables detailed request logging. |
-| `api-keys` | array of string | Client API keys accepted by Home. |
-| `passthrough-headers` | boolean | Passes upstream response headers to downstream clients. |
-| `streaming.keepalive-seconds` | integer | SSE heartbeat interval in seconds; `<=0` disables it. |
-| `streaming.bootstrap-retries` | integer | Streaming retries before first byte; `<=0` disables it. |
-| `nonstream-keepalive-interval` | integer | Blank-line keepalive interval for non-streaming responses. |
-| `debug` | boolean | Enables debug logging/features. |
-| `pprof.enable` | boolean | Enables pprof server. |
-| `pprof.addr` | string | pprof listen address. |
-| `commercial-mode` | boolean | Reduces high-overhead middleware behavior under high concurrency. |
-| `logging-to-file` | boolean | Writes app logs to files instead of stdout. |
-| `logs-max-total-size-mb` | integer | Total log file size limit in MB; `0` disables cleanup. |
-| `error-logs-max-files` | integer | Retained request error log file count. |
-| `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
-| `plugins.dir` | string | Local plugin artifact directory used by each node. |
-| `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
-| `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
-| `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
-| `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |
-| `disable-cooling` | boolean | Globally disables Home request-error and quota cooldown scheduling (402/403/404, 408/500/502/503/504, and model-level 429) only when a credential/provider does not explicitly set the same field. An explicit credential/provider `true` or `false` takes precedence. HTTP 401 and model-not-supported recovery remain unchanged. This Home-local value is persisted and applied on reload; config sent to downstream CPA nodes is independently forced to `true`. |
-| `auth-auto-refresh-workers` | integer | Overrides auth auto-refresh worker count. |
-| `request-retry` | integer | Used by the CPA execution layer: additional retry rounds after the first credential round is exhausted on HTTP 403, 408, 429, 500, 502, 503, or 504. Round `0` is the initial round; additional round `r` only admits credentials whose effective `request-retry` is at least `r`. An explicit non-negative credential/provider override takes precedence; an omitted or negative override inherits this global value, and explicit `0` admits only round `0`. Home returns `request_retry` as the maximum applicable value for the current candidate set, which is only the CPA request-level outer limit; Home applies the per-credential round filter separately. New CPA-to-Home RESP payloads carry an explicit `retry_round: 0` in the initial round, increment it for additional rounds, and exclude credentials already tried in the current round; legacy payloads without these fields retain the count-based cap for compatibility. |
-| `max-retry-credentials` | integer | Maximum different credentials tried in each credential retry round after round filtering; `<=0` means all available credentials in that round. Credentials skipped by this cap still age according to their effective retry window, so this setting does not guarantee that every credential receives the configured number of actual attempts. |
-| `max-retry-interval` | integer | Maximum remaining cooldown in seconds that CPA may wait before starting a new credential retry round. A round waits only when at least one eligible credential will recover within this threshold; credentials with a longer remaining cooldown do not trigger it. `<=0` permits only rounds that can start immediately without a cooldown wait. |
-| `quota-exceeded.switch-project` | boolean | Switches Gemini project on quota errors. |
-| `quota-exceeded.switch-preview-model` | boolean | Switches to preview model on quota errors. |
-| `quota-exceeded.antigravity-credits` | boolean | Uses Antigravity credits as last-resort Claude fallback. |
-| `routing.strategy` | string | `round-robin` or `fill-first`. |
-| `routing.claude-code-session-affinity` | boolean | Deprecated Claude Code session affinity flag. |
-| `routing.session-affinity` | boolean | Universal session-sticky credential routing. |
-| `routing.session-affinity-ttl` | string | Session-to-auth binding duration. |
-| `antigravity-signature-cache-enabled` | boolean pointer | Enables Antigravity thinking signature cache validation. |
-| `antigravity-signature-bypass-strict` | boolean pointer | Controls strictness of Antigravity signature bypass. |
-| `antigravity.sensitive-words` | array of string | Words to obfuscate with zero-width characters in system instructions. |
-| `gemini-api-key` | array of `GeminiKey` | Gemini API-key credentials; use provider-key routes. |
-| `interactions-api-key` | array of `GeminiKey` | Native Google Interactions API-key credentials; use provider-key routes. |
-| `codex-api-key` | array of `CodexKey` | Codex API-key credentials; use provider-key routes. |
-| `codex-api-key[].models[].support-configuration-update` | boolean | Enables Responses `configuration_update` for this configured model only; defaults to `false`. |
-| `xai-api-key` | array of `XAIKey` | Native xAI API-key credentials; use provider-key routes. |
-| `meta-api-key` | array of `MetaKey` | Native Meta Muse API-key credentials; use provider-key routes. |
-| `codex-header-defaults.user-agent` | string | Default Codex User-Agent. |
-| `codex-header-defaults.beta-features` | string | Default Codex websocket beta features header. |
-| `claude-api-key` | array of `ClaudeKey` | Claude API-key credentials; use provider-key routes. |
-| `claude-header-defaults.user-agent` | string | Default Claude User-Agent. |
-| `claude-header-defaults.package-version` | string | Default Claude package version. |
-| `claude-header-defaults.runtime-version` | string | Default Claude runtime version. |
-| `claude-header-defaults.os` | string | Default Claude OS fingerprint. |
-| `claude-header-defaults.arch` | string | Default Claude architecture fingerprint. |
-| `claude-header-defaults.timeout` | string | Default Claude timeout header. |
-| `claude-header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
-| `openai-compatibility` | array of `OpenAICompatibility` | OpenAI-compatible providers; use provider-key routes. |
-| `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials; use provider-key routes. |
-| `oauth-excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
-| `oauth-model-alias` | object string to array of `OAuthModelAlias` | Per-channel OAuth model aliases. |
-| `oauth-model-alias.*[].force-mapping` | boolean | When true, response model fields use the mapped upstream model name. |
-| `payload.default` | array of `PayloadRule` | Sets missing JSON payload params. |
-| `payload.default-raw` | array of `PayloadRule` | Sets missing raw JSON payload params. |
-| `payload.override` | array of `PayloadRule` | Overrides JSON payload params. |
-| `payload.override-raw` | array of `PayloadRule` | Overrides raw JSON payload params. |
-| `payload.filter` | array of `PayloadFilterRule` | Removes JSON payload paths. |
-
-Payload nested structure:
-
-```json
-{
-  "PayloadRule": {
-    "models": [
-      { "name": "gpt-*", "protocol": "responses" }
-    ],
-    "params": {
-      "reasoning.effort": "high"
-    }
-  },
-  "PayloadFilterRule": {
-    "models": [
-      { "name": "gpt-*", "protocol": "responses" }
-    ],
-    "params": ["metadata.debug"]
-  },
-  "PayloadModelRule": {
-    "name": "model pattern or wildcard",
-    "protocol": "translator protocol",
-    "from-protocol": "source protocol",
-    "headers": {
-      "Header-Name": "wildcard value"
-    },
-    "match": [
-      { "json.path": "required value" }
-    ],
-    "not-match": [
-      { "json.path": "disallowed value" }
-    ],
-    "exist": ["json.path"],
-    "not-exist": ["json.path"]
-  }
-}
-```
-
-`PayloadModelRule` fields:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | string | Target model name or wildcard pattern. |
-| `protocol` | string | Current translator protocol/provider format matcher, such as `openai`, `responses`, `gemini`, `claude`, `codex`, or `antigravity`. |
-| `from-protocol` | string | Source protocol matcher used when a request was translated from another protocol. |
-| `headers` | object string to string | Request header matchers. Every configured header must be present and its value must match the configured wildcard pattern. |
-| `match` | array of object | Payload JSON path/value conditions that must match. Paths use the same gjson/sjson-style path syntax as payload params. |
-| `not-match` | array of object | Payload JSON path/value conditions that must not match. |
-| `exist` | array of string | Payload JSON paths that must exist and not be `null`. |
-| `not-exist` | array of string | Payload JSON paths that must be missing or `null`. |

@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -11,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	cpaauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginhost"
+	cpaauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginhost"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	log "github.com/sirupsen/logrus"
 )
@@ -148,12 +149,19 @@ func (h *Handler) ServePluginAuthURL(c *gin.Context) bool {
 		return false
 	}
 	provider, okProvider := pluginAuthProviderFromManagementPath(c.Request.URL.Path)
+	callbackPath := "/v0/management/oauth-callback"
+	if c.Request.URL.Path == "/v8/management/oauth/auth-url" {
+		var errProvider error
+		provider, errProvider = normalizePluginOAuthProvider(c.Query("provider"))
+		okProvider = errProvider == nil
+		callbackPath = "/v8/management/oauth/callback"
+	}
 	if !okProvider || !h.runtime.HasPluginAuthProvider(provider) {
 		return false
 	}
 
 	ctx := pluginAuthRequestContext(requestContextOrBackground(c), c)
-	baseURL, errBaseURL := h.pluginManagementCallbackURL(c, "/v0/management/oauth-callback")
+	baseURL, errBaseURL := h.pluginManagementCallbackURL(c, callbackPath)
 	if errBaseURL != nil {
 		log.WithError(errBaseURL).WithField("provider", provider).Error("cluster plugin oauth: callback URL failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
@@ -199,7 +207,14 @@ func (h *Handler) respondPluginAuthStatus(c *gin.Context, ctx context.Context, s
 		return true
 	}
 
-	resp, handled, errPoll := h.runtime.PollPluginLogin(pluginAuthRequestContext(ctx, c), provider, session.State, pluginOAuthPollMetadata(data))
+	pollCtx, cancelPoll := h.oauthSessionContext(ctx, session.State, cluster.OAuthSessionTTL)
+	defer cancelPoll()
+	resp, handled, errPoll := h.runtime.PollPluginLogin(pluginAuthRequestContext(pollCtx, c), provider, session.State, pluginOAuthPollMetadata(data))
+	// A remote cancellation may have won while the plugin was polling.
+	if current, errCurrent := h.repo.GetOAuthSession(ctx, session.State); errCurrent == nil && (current == nil || current.Status != "") {
+		h.GetAuthStatus(c)
+		return true
+	}
 	if !handled {
 		c.JSON(http.StatusOK, gin.H{"status": "wait"})
 		return true
@@ -226,23 +241,20 @@ func (h *Handler) respondPluginAuthStatus(c *gin.Context, ctx context.Context, s
 			c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Authentication failed"})
 			return true
 		}
-		for _, auth := range auths {
-			if _, errUpsert := h.repo.UpsertAuth(ctx, auth, "upsert"); errUpsert != nil {
-				log.WithError(errUpsert).WithField("provider", provider).Error("cluster plugin oauth: save auth failed")
-				_ = h.repo.SetOAuthSessionError(ctx, session.State, "Failed to save authentication tokens")
-				c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Failed to save authentication tokens"})
+		if errComplete := h.repo.CompleteOAuthSessionWithAuths(ctx, session.State, auths); errComplete != nil {
+			if errors.Is(errComplete, cluster.ErrOAuthSessionNotPending) {
+				h.GetAuthStatus(c)
 				return true
 			}
+			log.WithError(errComplete).WithField("provider", provider).Error("cluster plugin oauth: save auth failed")
+			_ = h.repo.SetOAuthSessionError(ctx, session.State, "Failed to save authentication tokens")
+			c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Failed to save authentication tokens"})
+			return true
 		}
 		if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
 			log.WithError(errRefresh).WithField("provider", provider).Error("cluster plugin oauth: refresh auth failed")
 			_ = h.repo.SetOAuthSessionError(ctx, session.State, "Failed to save authentication tokens")
 			c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Failed to save authentication tokens"})
-			return true
-		}
-		if errComplete := h.repo.CompleteOAuthSession(ctx, session.State); errComplete != nil {
-			log.WithError(errComplete).WithField("provider", provider).Error("cluster plugin oauth: complete session failed")
-			c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Authentication failed"})
 			return true
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

@@ -10,13 +10,16 @@ RUN go mod download
 
 COPY . .
 
+# Docker images serve management assets from a runtime-mounted directory instead
+# of embedding the control panel into the Go binary.
+RUN rm -rf internal/managementasset/static && mkdir -p internal/managementasset/static && touch internal/managementasset/static/.gitkeep
+
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
-RUN test -s internal/managementasset/static/management.html
-
-RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIHome ./cmd/home/
+# Limit package compilation concurrency to reduce peak memory usage in small builders.
+RUN CGO_ENABLED=1 GOOS=linux go build -p=1 -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIHome ./cmd/home/
 
 FROM debian:bookworm
 

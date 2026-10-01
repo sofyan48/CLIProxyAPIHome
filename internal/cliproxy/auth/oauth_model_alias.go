@@ -319,7 +319,7 @@ func OAuthModelAliasChannel(provider, authKind string) string {
 		return "claude"
 	case "codex":
 		return "codex"
-	case "antigravity", "kimi", "xai", "meta", "devin":
+	case "antigravity", "kimi", "kimi-ai", "xai", "meta", "devin":
 		return provider
 	default:
 		return ""

@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
 
@@ -107,6 +108,13 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	}
 	if provider == "" {
 		return nil
+	}
+	if provider == "kimi" || provider == "kimi-ai" {
+		if kimi.ResolveKimiDomain(provider, nil, metadata) == kimi.KimiAIDomain {
+			provider = "kimi-ai"
+		} else {
+			provider = "kimi"
+		}
 	}
 	label := provider
 	if email, _ := metadata["email"].(string); email != "" {

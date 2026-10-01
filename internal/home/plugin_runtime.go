@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	cpaauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginhost"
+	cpaauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginhost"
 	homeauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
@@ -573,4 +573,13 @@ func cloneAnyMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+// PluginHost exposes the Home-owned host to management operations. Credentials
+// supplied to it are loaded from the Home repository, not an SDK file store.
+func (r *Runtime) PluginHost() *sdkpluginhost.Host {
+	if r == nil {
+		return nil
+	}
+	return r.pluginHost
 }

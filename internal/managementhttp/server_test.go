@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
-	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
+	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
 )
 

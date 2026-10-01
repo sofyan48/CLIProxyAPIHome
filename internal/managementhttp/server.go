@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
-	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
@@ -647,6 +647,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		clusterHandler = clustermanagement.NewHandler(clusterOpt.Repository, clusterOpt.Runtime, clusterOpt.NodeIP, clusterOpt.NodePort)
 		clusterHandler.SetHeartbeatTimeout(clusterOpt.HeartbeatTimeout)
 		clusterHandler.SetForwardTLSConfig(clusterOpt.ForwardTLSConfig)
+		clusterHandler.SetQuotaRecollectTrigger(clusterOpt.QuotaRecollect)
 		clusterGroup := engine.Group("/v0/cluster")
 		clusterGroup.Use(withBuildInfoHeaders(), clusterMTLSMiddleware())
 		registerClusterInternalRoutes(clusterGroup, clusterHandler)
@@ -681,6 +682,24 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		)
 	}
 	reg.Register(mgmt)
+	v8 := engine.Group("/v8/management")
+	v8.Use(mgmt.Handlers[len(engine.Handlers):]...)
+	if !clusterEnabled {
+		v8.Use(func(c *gin.Context) { c.Set("management.config-v8", true) })
+	}
+	managementV8Routes(reg, handler, clusterHandler).Register(v8)
+	// OAuth callbacks authenticate with their pending state, as in CPA V8.
+	callback := engine.Group("/v8/management/oauth")
+	callback.Use(withBuildInfoHeaders())
+	if clusterEnabled {
+		callback.Use(clusterAvailabilityMiddleware(clusterOpt, handler))
+		callback.GET("/callback", clusterHandler.PostOAuthCallback)
+		callback.POST("/callback", clusterHandler.PostOAuthCallback)
+	} else {
+		callback.Use(refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore))
+		callback.GET("/callback", handler.GetOAuthCallback)
+		callback.POST("/callback", handler.PostOAuthCallback)
+	}
 	if clusterEnabled && clusterHandler != nil {
 		engine.NoRoute(clusterManagementNoRoute(clusterOpt, handler, clusterHandler))
 	}
