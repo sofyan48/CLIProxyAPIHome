@@ -10,10 +10,6 @@ RUN go mod download
 
 COPY . .
 
-# Docker images serve management assets from a runtime-mounted directory instead
-# of embedding the control panel into the Go binary.
-RUN rm -rf internal/managementasset/static && mkdir -p internal/managementasset/static && touch internal/managementasset/static/.gitkeep
-
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
