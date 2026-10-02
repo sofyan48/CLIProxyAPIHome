@@ -58,6 +58,9 @@ type Config struct {
 	// UserEmail configures verified user emails and password-recovery delivery.
 	UserEmail UserEmailConfig `yaml:"user-email" json:"-"`
 
+	// UserPanel contains Home-only display metadata, never CPA runtime settings.
+	UserPanel UserPanelConfig `yaml:"user-panel" json:"-"`
+
 	// CredentialConcurrency controls Home credential concurrency lifecycle behavior.
 	CredentialConcurrency CredentialConcurrencyConfig `yaml:"credential-concurrency" json:"credential-concurrency"`
 
@@ -880,6 +883,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	cfg.NormalizePluginsConfig()
 	cfg.NormalizeUserEmailConfig()
+	if errUserPanel := cfg.NormalizeAndValidateUserPanelConfig(); errUserPanel != nil {
+		return nil, errUserPanel
+	}
 	cfg.NormalizeTrustedProxies()
 	if errTrustedProxies := ValidateTrustedProxies(cfg.TrustedProxies); errTrustedProxies != nil {
 		return nil, errTrustedProxies

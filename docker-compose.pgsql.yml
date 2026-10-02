@@ -18,6 +18,8 @@ services:
   home:
     image: ${CLI_PROXY_HOME_IMAGE:-eceasy/cli-proxy-api-home:latest}
     pull_policy: always
+    environment:
+      HOME_USER_EMAIL_SMTP_PASSWORD: ""
     build:
       context: .
       dockerfile: Dockerfile

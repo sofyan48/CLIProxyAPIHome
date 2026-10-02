@@ -14,6 +14,16 @@ import (
 // than in whichever file happens to implement it.
 func (h *Handler) GetCapabilities(c *gin.Context) {
 	enabled := h.userEmailEnabled()
+	serverInfo := gin.H{
+		"home_version":    buildinfo.Version,
+		"home_commit":     buildinfo.Commit,
+		"home_build_date": buildinfo.BuildDate,
+	}
+	if h != nil && h.runtime != nil {
+		if cfg := h.runtime.Config(); cfg != nil && cfg.UserPanel.CPAPublicURL != "" {
+			serverInfo["cpa_public_url"] = cfg.UserPanel.CPAPublicURL
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"capabilities": gin.H{
 			"email_registration": enabled,
@@ -24,10 +34,6 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			// handling a 404 as if it were an outage.
 			"model_catalog": true,
 		},
-		"server_info": gin.H{
-			"home_version":    buildinfo.Version,
-			"home_commit":     buildinfo.Commit,
-			"home_build_date": buildinfo.BuildDate,
-		},
+		"server_info": serverInfo,
 	})
 }

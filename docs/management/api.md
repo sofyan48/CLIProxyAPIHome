@@ -3905,6 +3905,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
 | `management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
 | `management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
+| `user-panel.cpa-public-url` | string | Optional absolute HTTP/HTTPS public CPA URL without credentials; surrounding whitespace is trimmed for display. DB-backed, Home-only display metadata exposed as `server_info.cpa_public_url` by `GET /user/capabilities` when nonempty. Never controls listeners, clustering, or downstream CPA runtime config. Set via `PUT /v8/management/config/user-panel/cpa-public-url` with a JSON string, or the root `user-panel` object; empty clears display metadata. |
 | `user-email.enabled` | boolean | Enables verified-email registration and password recovery when all mail settings are valid. |
 | `user-email.public-user-url` | string | Absolute public user-panel URL used in verify/reset links; production requires HTTPS. |
 | `user-email.from-address` | string | SMTP envelope/header mailbox without a display name. |
@@ -4195,7 +4196,7 @@ Each row names a legacy config field/root and its canonical v8 tree location. JS
 | `meta-api-key` | `api-keys.meta` |
 | `openai-compatibility` | `api-keys.openai-compatibility` |
 
-`plugins`, `user-email`, the canonical session-affinity settings under `routing`, and `quota-exceeded.switch-project` / `switch-preview-model` retain their names. `quota-exceeded.antigravity-credits` moves into the Antigravity OAuth provider subtree. Upstream arrays become grouped `api-keys.<provider>` lists; compatibility `api-key-entries` becomes `keys`. The client-key string list moves from the legacy config array `api-keys` to `access.api-keys`; replacing it still reconciles the live key table. Rich key records use the `/access/api-keys` resource API.
+`plugins`, `user-email`, `user-panel`, the canonical session-affinity settings under `routing`, and `quota-exceeded.switch-project` / `switch-preview-model` retain their names. `quota-exceeded.antigravity-credits` moves into the Antigravity OAuth provider subtree. Upstream arrays become grouped `api-keys.<provider>` lists; compatibility `api-key-entries` becomes `keys`. The client-key string list moves from the legacy config array `api-keys` to `access.api-keys`; replacing it still reconciles the live key table. Rich key records use the `/access/api-keys` resource API.
 
 Startup/import parsing accepts legacy and mixed layouts. When both versions of a field exist, explicit v8 presence wins, including `false`, `0`, and empty collections. v8 writes require the canonical layout and reject legacy/unknown fields rather than silently accepting them. Use the v8 GET response to obtain a migrated tree, retain read-only revisions and credential IDs, then use subtree PATCH/PUT or a complete replacement.
 

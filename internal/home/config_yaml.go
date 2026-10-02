@@ -151,6 +151,7 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 	removeConfigKeysForDownstream(doc, []string{
 		"remote-management",
 		"user-email",
+		"user-panel",
 		"api-keys",
 		"auth-dir",
 		"tls",
