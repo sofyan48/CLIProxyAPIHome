@@ -128,15 +128,54 @@ func (r *Repository) DeleteModelGroup(ctx context.Context, id uint) error {
 
 	ctx = contextOrBackground(ctx)
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		record := ModelGroupRecord{}
 		if errFirst := tx.Where("id = ?", id).First(&record).Error; errFirst != nil {
 			return errFirst
+		}
+		if errUnbind := removeModelGroupFromAPIKeys(ctx, tx, id); errUnbind != nil {
+			return errUnbind
 		}
 		if errDeleteDetails := tx.Where("model_group_id = ?", id).Delete(&ModelGroupDetailRecord{}).Error; errDeleteDetails != nil {
 			return errDeleteDetails
 		}
 		return tx.Delete(&record).Error
 	})
+}
+
+func removeModelGroupFromAPIKeys(ctx context.Context, tx *gorm.DB, modelGroupID uint) error {
+	var records []APIKeyRecord
+	if errFind := tx.WithContext(contextOrBackground(ctx)).Find(&records).Error; errFind != nil {
+		return errFind
+	}
+	for i := range records {
+		modelGroups, errModelGroups := apiKeyModelGroupsFromJSON(records[i].ModelGroups)
+		if errModelGroups != nil {
+			return fmt.Errorf("decode API key %d model groups: %w", records[i].ID, errModelGroups)
+		}
+		remaining := make([]uint, 0, len(modelGroups))
+		removed := false
+		for _, id := range modelGroups {
+			if id == modelGroupID {
+				removed = true
+				continue
+			}
+			remaining = append(remaining, id)
+		}
+		if !removed {
+			continue
+		}
+		modelGroupsJSON, errJSON := apiKeyModelGroupsJSON(remaining)
+		if errJSON != nil {
+			return errJSON
+		}
+		if errUpdate := tx.WithContext(contextOrBackground(ctx)).Model(&APIKeyRecord{}).Where("id = ?", records[i].ID).Update("model_groups", modelGroupsJSON).Error; errUpdate != nil {
+			return errUpdate
+		}
+	}
+	return nil
 }
 
 // ListModelGroupDetails returns model group details.

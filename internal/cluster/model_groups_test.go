@@ -121,6 +121,60 @@ func TestModelGroupDetailChannelsCreateAndUpdate(t *testing.T) {
 	}
 }
 
+func TestDeleteModelGroupRemovesAPIKeyBindings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, errOpenSQLite := OpenSQLite(ctx, filepath.Join(t.TempDir(), "home.db"))
+	if errOpenSQLite != nil {
+		t.Fatalf("OpenSQLite() error = %v", errOpenSQLite)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("get sqlite db: %v", errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sqlite db: %v", errClose)
+		}
+	}()
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+
+	repo := NewRepository(db)
+	deletedGroup, errDeletedGroup := repo.CreateModelGroup(ctx, "deleted-scope", false)
+	if errDeletedGroup != nil {
+		t.Fatalf("CreateModelGroup(deleted) error = %v", errDeletedGroup)
+	}
+	retainedGroup, errRetainedGroup := repo.CreateModelGroup(ctx, "retained-scope", false)
+	if errRetainedGroup != nil {
+		t.Fatalf("CreateModelGroup(retained) error = %v", errRetainedGroup)
+	}
+	modelGroups := []uint{deletedGroup.ID, retainedGroup.ID}
+	if _, errCreateKey := repo.CreateAPIKey(ctx, APIKeyEntryUpdate{APIKey: "scoped-client-key", ModelGroups: &modelGroups}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKey() error = %v", errCreateKey)
+	}
+
+	if errDelete := repo.DeleteModelGroup(ctx, deletedGroup.ID); errDelete != nil {
+		t.Fatalf("DeleteModelGroup() error = %v", errDelete)
+	}
+	entries, errEntries := repo.ListAPIKeyEntries(ctx)
+	if errEntries != nil {
+		t.Fatalf("ListAPIKeyEntries() error = %v", errEntries)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("API key entries = %#v, want one", entries)
+	}
+	if want := []uint{retainedGroup.ID}; !reflect.DeepEqual(entries[0].ModelGroups, want) {
+		t.Fatalf("model groups after delete = %v, want %v", entries[0].ModelGroups, want)
+	}
+
+	if _, errGet := repo.GetModelGroup(ctx, deletedGroup.ID); !errors.Is(errGet, gorm.ErrRecordNotFound) {
+		t.Fatalf("GetModelGroup(deleted) error = %v, want record not found", errGet)
+	}
+}
+
 func TestAllowedDispatchIDsForAPIKeyModelIntersectsModelChannels(t *testing.T) {
 	t.Parallel()
 

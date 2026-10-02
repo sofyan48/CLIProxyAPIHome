@@ -177,6 +177,8 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `DELETE` | `/totp` |
 | `GET` | `/billing/overview` |
 | `GET` | `/billing/charges` |
+| `GET` | `/billing/balance-records` |
+| `POST` | `/billing/recharge` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -934,9 +936,9 @@ Authorization: Bearer user.jwt.token
 
 ## Billing
 
-用户计费路由位于 `/user` 基础路径下，因此完整路径是 `/user/billing/overview` 和 `/user/billing/charges`。两个路由都需要 `/user/register` 或 `/user/login` 返回的现有 Bearer token，响应只包含当前认证 Bearer 用户的数据。
+用户计费路由位于 `/user` 下：`/user/billing/overview`、`/user/billing/charges`、`/user/billing/balance-records` 和 `/user/billing/recharge`。全部需要现有 Bearer session，用户身份严格来自 session；查询参数或 JSON 中的 `user_id` 被忽略。
 
-用户计费响应不包含管理员备注、全局汇总、模型价格管理数据、代理池数据、原始 API keys、脱敏 API keys、价格快照、匹配的价格规则、endpoint、`balance_before` 或其他用户的数据。
+用户计费响应不包含管理员备注、全局汇总、模型价格管理数据、代理池数据、原始 API keys、脱敏 API keys、价格快照、匹配的价格规则、endpoint 或其他用户的数据。扣费条目不包含 `balance_before`；余额分类账条目包含该字段，但不暴露存储的备注和操作人信息。
 
 用户计费的 `from` 和 `to` 查询参数接受 `YYYY-MM-DD`、RFC3339 或 Unix 秒，并统一使用半开区间 `[from,to)`。Unix 秒值必须位于 `2000-01-01T00:00:00Z` 到 `9999-12-31T23:59:59Z` 之间；毫秒时间戳会被拒绝。只有日期的 `to` 会转换为下一个 UTC 零点，从而完整包含结束 UTC 日期。显式时间戳形式的 `to` 是精确的排他上界，不会自动扩展。需要查询完整非 UTC 自然日的客户端应发送从本地零点到下一个本地零点的 RFC3339 边界，例如 `2026-06-10T00:00:00+08:00` 到 `2026-06-11T00:00:00+08:00`。
 
@@ -985,6 +987,29 @@ Authorization: Bearer user.jwt.token
 | `today_spend` | number | 当前计费概览查询返回的消费值。 |
 | `month_spend` | number | 当前计费概览查询返回的消费值。 |
 | `top_models[]` | array | 模型消费条目，字段为 `id`、`label`、`amount`、`request_count`。 |
+| `total_charge_amount` | number | 所选时间范围内当前用户请求扣费总额。 |
+| `total_recharge_amount` | number | 所选时间范围内当前用户充值总额。 |
+| `total_deduct_amount` | number | 所选时间范围内当前用户手工扣减总额，不含请求扣费。 |
+| `request_count` | integer | 所选时间范围内当前用户计费请求数。 |
+| `input_tokens`、`output_tokens`、`cache_tokens` | integer | 所选时间范围内当前用户计费 token 汇总。 |
+
+不传时间范围时汇总全部可用记录。`current_balance` 始终为当前余额。原有 `today_spend` 和 `month_spend` 保持行为不变，均返回所选范围的请求扣费总额。
+
+### GET `/billing/balance-records`
+
+仅返回 session 用户的充值及手工扣减分类账，按时间倒序排列。支持与 charges 相同的 `from`/`to`，以及 `limit`（默认 `50`，最大 `200`）和 `offset`（默认 `0`）。非正数/非整数 limit、负数/非整数 offset 返回 `400`。用户筛选输入被忽略。
+
+响应：`200 { "items": BalanceRecord[], "total": integer, "limit": integer, "offset": integer }`。`total` 是分页前当前用户的匹配记录数；空页返回 `items: []`。
+
+`BalanceRecord` 字段：`id`（string）、`type`（`recharge` 或 `deduct`）、`amount`（number）、`balance_before`（number）、`balance_after`（number）、`created_at`（RFC3339 string）。不返回备注、操作人或用户 ID。
+
+### POST `/billing/recharge`
+
+**无限制自助增加余额：**直接给 session 用户充值，不验证支付、兑换券或管理员批准。这不是支付集成。每次成功请求都会新增充值，不支持幂等键。
+
+请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。可选 `note` 是字符串，去除首尾空白后存入分类账。提供的 `user_id`、`operator`、`type` 无法修改目标用户或操作类型。
+
+响应：`200 { "record": BalanceRecord, "current_balance": number }`。通过 `ApplyBillingBalanceRecord` 在单个数据库事务中更新余额和写入分类账。保留现有 `credits_unlimited` 行为：记录充值但不修改数值余额。认证失败返回 `401`；数据库失败（包括最终余额溢出）返回 `500 billing_recharge_failed`，不会发生部分写入。
 
 ### GET `/billing/charges`
 
