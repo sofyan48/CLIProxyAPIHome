@@ -283,6 +283,8 @@ services:
   home:
     image: meongbego/cliphome
     container_name: cliproxy-home
+    environment:
+      HOME_USER_EMAIL_SMTP_PASSWORD: ""
     depends_on:
       postgres:
         condition: service_healthy
