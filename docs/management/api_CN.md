@@ -3904,6 +3904,7 @@ Query 参数：
 | `management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/management.html`、`/user.html`、`/assets/*`。 |
 | `management.disable-auto-update-panel` | boolean | 兼容旧配置的字段；内嵌 panel assets 不会在运行时更新。 |
 | `management.panel-github-repository` | string | 兼容旧配置的内嵌 panel 源仓库字段。 |
+| `user-panel.cpa-public-url` | string | 可选的绝对 HTTP/HTTPS CPA 公开 URL，不允许包含凭据；展示时去除首尾空白。存储于 DB config，仅为 Home 展示元数据；非空时由 `GET /user/capabilities` 返回 `server_info.cpa_public_url`。不会控制监听器、集群或下游 CPA 运行配置。可通过 `PUT /v8/management/config/user-panel/cpa-public-url` 写入 JSON 字符串，或写入根级 `user-panel` 对象；空字符串清除展示元数据。 |
 | `user-email.enabled` | boolean | 邮件配置全部有效时启用已验证邮箱注册与密码找回。 |
 | `user-email.public-user-url` | string | verify/reset 链接使用的绝对公开用户面板 URL；生产环境要求 HTTPS。 |
 | `user-email.from-address` | string | 不带 display name 的 SMTP envelope/header 邮箱。 |
@@ -4194,7 +4195,7 @@ v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state �
 | `meta-api-key` | `api-keys.meta` |
 | `openai-compatibility` | `api-keys.openai-compatibility` |
 
-`plugins`、`user-email`、`routing` 下的规范 session-affinity 设置，以及 `quota-exceeded.switch-project` / `switch-preview-model` 保留原名。`quota-exceeded.antigravity-credits` 移入 Antigravity OAuth provider 子树。上游数组变为 `api-keys.<provider>` 分组列表，兼容 provider 的 `api-key-entries` 改为 `keys`。客户端 key 字符串列表从旧 `api-keys` 数组移到 `access.api-keys`，替换它仍会协调运行时 key 表；完整 key 记录使用 `/access/api-keys` 资源接口。
+`plugins`、`user-email`、`user-panel`、`routing` 下的规范 session-affinity 设置，以及 `quota-exceeded.switch-project` / `switch-preview-model` 保留原名。`quota-exceeded.antigravity-credits` 移入 Antigravity OAuth provider 子树。上游数组变为 `api-keys.<provider>` 分组列表，兼容 provider 的 `api-key-entries` 改为 `keys`。客户端 key 字符串列表从旧 `api-keys` 数组移到 `access.api-keys`，替换它仍会协调运行时 key 表；完整 key 记录使用 `/access/api-keys` 资源接口。
 
 启动/导入解析接受旧布局和混合布局。同一字段同时出现新旧值时，显式 v8 字段优先，包括 `false`、`0` 和空集合。v8 管理写入只接受规范布局，对旧字段或未知字段报错。迁移时先读取 v8 GET 响应，保留只读 revision 和凭证 ID，再执行子树 PATCH/PUT 或完整替换。
 

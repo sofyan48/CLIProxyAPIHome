@@ -428,7 +428,7 @@ func NormalizeConfigLayout(data []byte, migrate bool) ([]byte, bool, error) {
 }
 
 func v8AllowedRoots() map[string]bool {
-	allowed := map[string]bool{"config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "credential-concurrency-policies": true}
+	allowed := map[string]bool{"config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "user-panel": true, "credential-concurrency-policies": true}
 	for _, path := range v8Paths {
 		section, _, _ := strings.Cut(path.current, ".")
 		allowed[section] = true
@@ -612,6 +612,9 @@ func ValidateV8Config(data []byte) error {
 	var cfg legacyConfig
 	if errDecode := decoder.Decode(&cfg); errDecode != nil {
 		return errDecode
+	}
+	if errUserPanel := (*Config)(&cfg).NormalizeAndValidateUserPanelConfig(); errUserPanel != nil {
+		return errUserPanel
 	}
 	_, errParse := cpaconfig.ParseConfigBytes(data)
 	return errParse

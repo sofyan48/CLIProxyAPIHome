@@ -186,6 +186,9 @@ func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, erro
 		cfg.Port = appconfig.DefaultCPAPort
 	}
 	cfg.NormalizeUserEmailConfig()
+	if errUserPanel := cfg.NormalizeAndValidateUserPanelConfig(); errUserPanel != nil {
+		return nil, nil, errUserPanel
+	}
 	cfg.NormalizeTrustedProxies()
 	if errTrustedProxies := appconfig.ValidateTrustedProxies(cfg.TrustedProxies); errTrustedProxies != nil {
 		return nil, nil, errTrustedProxies

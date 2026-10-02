@@ -220,10 +220,20 @@ Example response:
   "server_info": {
     "home_version": "v1.2.3",
     "home_commit": "abcdef0",
-    "home_build_date": "2026-07-20"
+    "home_build_date": "2026-07-20",
+    "cpa_public_url": "https://cpa.example.com/v1"
   }
 }
 ```
+
+`server_info.cpa_public_url` is an optional string, omitted when `user-panel.cpa-public-url` is empty or unset. Configure it in DB config (for example, `PUT /v8/management/config/user-panel/cpa-public-url` with a JSON string). The `user-panel` root is unchanged in legacy and v8 layouts:
+
+```yaml
+user-panel:
+  cpa-public-url: "https://cpa.example.com/v1"
+```
+
+Nonempty values must be absolute HTTP/HTTPS URLs without credentials; surrounding whitespace is trimmed for display. This is display-only public metadata, not a listener address, cluster setting, or downstream CPA runtime configuration, and is not forwarded to CPA nodes. Empty string clears the displayed URL. `config.yaml` is an import/export exchange format, not the runtime source of truth.
 
 The three email flags are `false` when `user-email.enabled` is false or the mail configuration is incomplete or invalid. Older Home versions may return `404` because this route does not exist.
 

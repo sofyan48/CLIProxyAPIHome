@@ -19,6 +19,8 @@ remote-management:
   allow-remote: false
 trusted-proxies:
   - "127.0.0.1"
+user-panel:
+  cpa-public-url: "https://cpa.example.com/v1"
 user-email:
   enabled: true
   public-user-url: "https://home.example.com/user.html"
@@ -100,6 +102,8 @@ plugins:
 	assertNotContains("tls:")
 	assertNotContains("remote-management:")
 	assertNotContains("user-email:")
+	assertNotContains("user-panel:")
+	assertNotContains("https://cpa.example.com/v1")
 	assertNotContains("HOME_USER_EMAIL_SMTP_PASSWORD")
 	assertNotContains("auth-dir:")
 	assertNotContains("api-keys:")

@@ -56,6 +56,34 @@ func TestUserCapabilitiesReportBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestUserCapabilitiesCPAPublicURL(t *testing.T) {
+	for _, publicURL := range []string{"", "https://cpa.example.com/v1"} {
+		t.Run(publicURL, func(t *testing.T) {
+			_, router, _ := newUserEmailTestHandler(t, func(cfg *appconfig.Config) {
+				cfg.UserPanel.CPAPublicURL = publicURL
+			})
+			response := performUserJSONRequest(t, router, http.MethodGet, "/user/capabilities", nil, "")
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d", response.Code)
+			}
+			var body struct {
+				ServerInfo map[string]any `json:"server_info"`
+			}
+			if errDecode := json.Unmarshal(response.Body.Bytes(), &body); errDecode != nil {
+				t.Fatal(errDecode)
+			}
+			value, exists := body.ServerInfo["cpa_public_url"]
+			if publicURL == "" {
+				if exists {
+					t.Fatalf("empty cpa_public_url must be omitted: %v", value)
+				}
+			} else if value != publicURL {
+				t.Fatalf("cpa_public_url = %v, want %s", value, publicURL)
+			}
+		})
+	}
+}
+
 func getUserCapabilities(t *testing.T, router http.Handler) userCapabilitiesPayload {
 	t.Helper()
 	response := performUserJSONRequest(t, router, http.MethodGet, "/user/capabilities", nil, "")

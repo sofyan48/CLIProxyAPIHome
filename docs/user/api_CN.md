@@ -220,10 +220,20 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
   "server_info": {
     "home_version": "v1.2.3",
     "home_commit": "abcdef0",
-    "home_build_date": "2026-07-20"
+    "home_build_date": "2026-07-20",
+    "cpa_public_url": "https://cpa.example.com/v1"
   }
 }
 ```
+
+`server_info.cpa_public_url` 为可选字符串；`user-panel.cpa-public-url` 为空或未设置时省略该字段。请在 DB config 中配置（例如通过 `PUT /v8/management/config/user-panel/cpa-public-url` 写入 JSON 字符串）。旧布局与 v8 布局均保留根级 `user-panel`：
+
+```yaml
+user-panel:
+  cpa-public-url: "https://cpa.example.com/v1"
+```
+
+非空值必须为不含凭据的绝对 HTTP/HTTPS URL；展示时去除首尾空白。这仅是用于展示的公开元数据，不是监听地址、集群设置或下游 CPA 运行配置，也不会下发到 CPA 节点。空字符串清除展示的 URL。`config.yaml` 仅用于导入导出，并非运行时配置来源。
 
 当 `user-email.enabled` 为 false，或邮件配置不完整/无效时，三个邮箱相关 flag 都为 `false`。旧版 Home 可能因没有该 route 而返回 `404`。
 

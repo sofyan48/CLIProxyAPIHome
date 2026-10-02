@@ -81,6 +81,12 @@ management:
   # Legacy compatibility flag. Embedded bundle mode does not perform runtime remote updates.
   # disable-auto-update-panel: false
 
+# Home-only display metadata stored in DB config; never used for listeners,
+# clustering, or downstream CPA runtime configuration.
+user-panel:
+  # Optional absolute HTTP/HTTPS public CPA URL without credentials; empty omits it.
+  cpa-public-url: ""
+
 # Optional verified user email and password recovery.
 # Leave disabled to keep username-only registration and login behavior.
 user-email:

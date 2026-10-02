@@ -42,6 +42,17 @@ func TestConfigV8DatabaseRoundTrip(t *testing.T) {
 		}
 		return rec
 	}
+	request("PUT", "/v8/management/config/user-panel/cpa-public-url", `" https://cpa.example.com/v1 "`, 200)
+	if got := request("GET", "/v8/management/config/user-panel/cpa-public-url", "", 200).Body.String(); got != `" https://cpa.example.com/v1 "` {
+		t.Fatalf("user-panel metadata not persisted: %s", got)
+	}
+	panelConfig, _, errPanelConfig := repo.LoadConfigAsRuntimeConfig(context.Background())
+	if errPanelConfig != nil || panelConfig.UserPanel.CPAPublicURL != "https://cpa.example.com/v1" {
+		t.Fatalf("user-panel runtime metadata = %#v, error = %v", panelConfig, errPanelConfig)
+	}
+	for _, invalidURL := range []string{`"/v1"`, `"https://user:password@cpa.example.com"`} {
+		request("PUT", "/v8/management/config/user-panel/cpa-public-url", invalidURL, 400)
+	}
 	request("PUT", "/v8/management/config/routing/retry/request-retry", "0", 200)
 	request("PUT", "/v0/management/request-retry", `{"value":2}`, 200)
 	if got := request("GET", "/v8/management/config/routing/retry/request-retry", "", 200).Body.String(); got != "2" {
