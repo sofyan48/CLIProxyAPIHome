@@ -68,8 +68,8 @@ func TestV8ConfigOAuthScopeSurvivesSnapshots(t *testing.T) {
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.OAuthOnlyFields["codex.disable-codex-cloaking"] {
-		t.Fatal("scope lost in storage")
+	if cfg.OAuthOnlyFields["codex.disable-codex-cloaking"] {
+		t.Fatal("shared Codex setting retained OAuth-only scope in storage")
 	}
 	data, err = yaml.Marshal(cfg)
 	if err != nil {
@@ -79,8 +79,8 @@ func TestV8ConfigOAuthScopeSurvivesSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cpa.Codex.DisableCodexCloaking || cpa.ForAPIKey().Codex.DisableCodexCloaking {
-		t.Fatal("OAuth settings escaped to API-key execution")
+	if !cpa.Codex.DisableCodexCloaking || !cpa.ForAPIKey().Codex.DisableCodexCloaking {
+		t.Fatal("shared settings did not reach API-key execution")
 	}
 }
 
@@ -281,7 +281,19 @@ func TestV8MigrationRemovesRetiredFieldsAndPreservesSessionAffinity(t *testing.T
 			if errValidate := ValidateV8Config(migrated); errValidate != nil {
 				t.Fatal(errValidate)
 			}
-			cpa, errParse := cpaconfig.ParseConfigBytes(migrated)
+			var migratedRoot map[string]any
+			if errDecode := yaml.Unmarshal(migrated, &migratedRoot); errDecode != nil {
+				t.Fatal(errDecode)
+			}
+			compatible, errNormalize := NormalizeConfigRoot(migratedRoot)
+			if errNormalize != nil {
+				t.Fatal(errNormalize)
+			}
+			compatibleData, errMarshal := yaml.Marshal(compatible)
+			if errMarshal != nil {
+				t.Fatal(errMarshal)
+			}
+			cpa, errParse := cpaconfig.ParseConfigBytes(compatibleData)
 			if errParse != nil || cpa.Routing.SessionAffinity != test.want || !cpa.Codex.DisableCodexCloaking {
 				t.Fatalf("migration changed CPA settings: %v", errParse)
 			}

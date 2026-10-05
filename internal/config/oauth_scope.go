@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +17,7 @@ func (cfg Config) MarshalYAML() (any, error) {
 	}
 	value := reflect.ValueOf(cfg)
 	for _, path := range v8Paths {
-		if !cfg.OAuthOnlyFields[path.old] {
+		if !strings.HasPrefix(path.current, "oauth.providers.") || !cfg.OAuthOnlyFields[path.old] {
 			continue
 		}
 		field := yamlPath(&root, path.old)

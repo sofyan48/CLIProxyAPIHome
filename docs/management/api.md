@@ -330,7 +330,7 @@ Each mutation reads the authoritative DB view and applies the edit in one transa
 
 `GET` returns the same persisted v8 tree as YAML with content type `application/yaml; charset=utf-8` and `Cache-Control: no-store`. It reconstructs configuration from the database; original comments, formatting, and grouping are not preserved.
 
-`PUT` accepts a complete v8 YAML mapping and uses the same full-replacement, validation, credential reconciliation, and read-only-field rules as `PUT /config`. `PATCH /config.yaml` is not registered. v8 writes reject legacy/mixed-layout input even though startup/import parsing supports legacy and mixed files. Read `/config.yaml` from v8 to obtain a migrated document before replacing it.
+`PUT` accepts a complete v8 YAML mapping and uses the same full-replacement, validation, credential reconciliation, and read-only-field rules as `PUT /config`. `PATCH /config.yaml` is not registered. Historical v8 provider/client fields are accepted as aliases and writes use the latest layout; other legacy fields and unknown fields remain rejected.
 
 JSON writes preserve omitted TURN `username`/`credential` values only when the new ICE-server entry has the same ordered `urls` list as a previous entry. Explicit `""` or `null` clears a secret. Changed URLs do not inherit another server's secrets. YAML replacement does not restore omitted TURN secrets.
 
@@ -340,7 +340,7 @@ JSON writes preserve omitted TURN `username`/`credential` values only when the n
 | --- | --- | --- |
 | `400` | `invalid_json`, `invalid_body`, `config_must_be_object` | Malformed request or a non-object full config. |
 | `400` | `invalid_path`, `cannot_delete_config` | Unsupported traversal or attempt to delete the config root. |
-| `400` | `invalid_config` | Unknown/legacy fields, unsupported version/provider, wrong types, invalid groups, or invalid weights. A supplied `config-version` must be integer `8`. |
+| `400` | `invalid_config` | Unknown or unsupported legacy fields, unsupported version/provider, wrong types, invalid groups, or invalid weights. A supplied `config-version` must be integer `8`. |
 | `400` | `read_only_field` | A Home-owned revision was changed or removed; `field` contains its slash-separated path. |
 | `404` | `not_found` | Selected config field does not exist. |
 | `409` | `credential_identity_conflict` | Credential identity conflicts with persisted state. |
@@ -373,6 +373,20 @@ Example `PATCH /config/oauth/providers/antigravity` body:
 ```
 
 Settings under `oauth.providers` are OAuth-scoped. API-key credentials use their own group/key options; the v8 OAuth provider settings do not implicitly configure API-key credentials.
+
+Shared provider defaults use the top-level `upstream` section: `upstream.codex`,
+`upstream.claude` (including `header-defaults` and `disable-cloaking-model-list`),
+and `upstream.xai`. They apply to OAuth and API-key requests under the existing
+execution conditions; explicit credential options retain their precedence.
+Credential storage and refresh settings use `oauth.auth-dir` and
+`oauth.auth-auto-refresh-workers`. `client` retains client-specific
+configuration such as `client.codex.optimize-multi-agent-v2`.
+
+Startup/import accepts the historical OAuth and flat spellings. Canonical fields
+win by presence, including `false`, `0`, empty strings, and `null`; historical
+OAuth fields otherwise precede flat fields. v8 reads and successful mutations
+use canonical names. Home persists and publishes a compatible legacy runtime
+projection so the bundled CPA SDK can consume the shared values.
 
 #### Credential concurrency lifecycle fields
 
@@ -3964,13 +3978,13 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `oauth.providers.codex.header-defaults.user-agent` | string | Default Codex User-Agent. |
 | `oauth.providers.codex.header-defaults.beta-features` | string | Default Codex websocket beta features header. |
 | `api-keys.claude` | array of groups | Upstream claude groups with `keys`; see the provider configuration section. |
-| `oauth.providers.claude.header-defaults.user-agent` | string | Default Claude User-Agent. |
-| `oauth.providers.claude.header-defaults.package-version` | string | Default Claude package version. |
-| `oauth.providers.claude.header-defaults.runtime-version` | string | Default Claude runtime version. |
-| `oauth.providers.claude.header-defaults.os` | string | Default Claude OS fingerprint. |
-| `oauth.providers.claude.header-defaults.arch` | string | Default Claude architecture fingerprint. |
-| `oauth.providers.claude.header-defaults.timeout` | string | Default Claude timeout header. |
-| `oauth.providers.claude.header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
+| `upstream.claude.header-defaults.user-agent` | string | Default Claude User-Agent. |
+| `upstream.claude.header-defaults.package-version` | string | Default Claude package version. |
+| `upstream.claude.header-defaults.runtime-version` | string | Default Claude runtime version. |
+| `upstream.claude.header-defaults.os` | string | Default Claude OS fingerprint. |
+| `upstream.claude.header-defaults.arch` | string | Default Claude architecture fingerprint. |
+| `upstream.claude.header-defaults.timeout` | string | Default Claude timeout header. |
+| `upstream.claude.header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
 | `api-keys.openai-compatibility` | array of groups | Upstream openai-compatibility groups with `keys`; see the provider configuration section. |
 | `api-keys.vertex` | array of groups | Upstream vertex groups with `keys`; see the provider configuration section. |
 | `oauth.excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
@@ -4004,27 +4018,27 @@ These fields supplement the reference above. Settings under `oauth.providers` ap
 | `routing.cooldown.transient-error-cooldown-seconds` | integer | CPA transient-error cooldown setting carried with configuration. |
 | `oauth.providers.aistudio.ws-auth` | boolean | Home normalizes this to `false`. |
 | `oauth.request-scoped-errors` | provider-to-rule-array object | OAuth request-scoped error overrides. |
-| `oauth.providers.codex.disable-codex-cloaking` | boolean | Disables forcing official identity headers for Codex OAuth. |
-| `oauth.providers.codex.stream-bootstrap-buffering` | boolean | Buffers pre-generation frames to allow failover before committing a stream; default `false`. |
-| `oauth.providers.codex.stream-bootstrap-timeout` | duration string | Optional time ceiling for bootstrap buffering; `0` keeps only frame/byte bounds. |
-| `oauth.providers.codex.optimize-multi-agent-v2` | boolean | Optimizes official Codex multi-agent requests. |
-| `oauth.providers.codex.orphan-delegation-compatibility` | boolean | Enables compatibility for orphan delegation outputs. |
-| `oauth.providers.codex.model-level-cooling` | boolean | Scopes Codex quota cooldown to a model. |
-| `oauth.providers.codex.response-steering` | boolean | Enables full-duplex Codex WebSocket response steering. |
+| `upstream.codex.disable-codex-cloaking` | boolean | Disables forcing official identity headers for Codex OAuth and API-key requests. |
+| `upstream.codex.stream-bootstrap-buffering` | boolean | Buffers pre-generation frames to allow failover before committing a stream; default `false`. |
+| `upstream.codex.stream-bootstrap-timeout` | duration string | Optional time ceiling for bootstrap buffering; `0` keeps only frame/byte bounds. |
+| `client.codex.optimize-multi-agent-v2` | boolean | Optimizes official Codex multi-agent requests. |
+| `upstream.codex.orphan-delegation-compatibility` | boolean | Enables compatibility for orphan delegation outputs. |
+| `upstream.codex.model-level-cooling` | boolean | Scopes Codex quota cooldown to a model. |
+| `upstream.codex.response-steering` | boolean | Enables full-duplex Codex WebSocket response steering. |
 | `oauth.providers.codex.live-media-relay.enabled` | boolean | Enables the Codex Live WebRTC relay. |
 | `oauth.providers.codex.live-media-relay.max-sessions` | integer | Relay session limit. |
 | `oauth.providers.codex.live-media-relay.disable-private-remote-ips` | boolean | Rejects private remote media addresses when enabled. |
 | `oauth.providers.codex.live-media-relay.public-ip` | string | Advertised relay address. |
 | `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | Relay UDP port range. |
 | `oauth.providers.codex.live-media-relay.ice-servers` | object array | Each entry has `urls` and optional `username` / `credential`; JSON reads redact the latter two. |
-| `oauth.providers.claude.model-level-cooling` | boolean | Scopes Claude quota cooldown to a model. |
-| `oauth.providers.claude.disable-claude-cloak-mode` | boolean | Disables Claude OAuth cloaking. |
-| `oauth.providers.claude.claude-code.disable-cloaking-model-list` | boolean | Disables model-ID cloaking in Anthropic model-list responses. |
-| `oauth.providers.claude.header-defaults.timezone` | string | Additional Claude header fingerprint default. |
+| `upstream.claude.model-level-cooling` | boolean | Scopes Claude quota cooldown to a model. |
+| `upstream.claude.disable-claude-cloak-mode` | boolean | Disables Claude cloaking on OAuth and opted-in API-key CLI profiles. |
+| `upstream.claude.disable-cloaking-model-list` | boolean | Disables model-ID cloaking in Anthropic model-list responses. |
+| `upstream.claude.header-defaults.timezone` | string | Additional Claude header fingerprint default. |
 | `oauth.providers.antigravity.connection-pool.enabled` | optional boolean | Enables upstream pooling; default `false`. |
 | `oauth.providers.antigravity.connection-pool.idle-conn-timeout` | duration string | Idle timeout, default `30s`, capped at `210s`. |
 | `oauth.providers.antigravity.connection-pool.max-idle-conns-per-host` | optional integer | Idle connections per host per credential; default `2`. |
-| `oauth.providers.xai.inject-x-search` | boolean | Injects native `x_search` when absent from the request. |
+| `upstream.xai.inject-x-search` | boolean | Injects native `x_search` when absent from the request. |
 | `oauth.providers.devin.sensitive-words` | string array | Words obfuscated in system prompts/messages. |
 | `oauth.model-alias.*[].display-name` | string | Optional catalog display-name override. |
 | `multimedia.gpt-image-2-base-model` | string | Base model used for GPT Image 2 requests. |
@@ -4164,17 +4178,17 @@ Each row names a legacy config field/root and its canonical v8 tree location. JS
 | `oauth-excluded-models` | `oauth.excluded-models` |
 | `oauth-request-scoped-errors` | `oauth.request-scoped-errors` |
 | `ws-auth` | `oauth.providers.aistudio.ws-auth` |
-| `codex` | `oauth.providers.codex` |
+| `codex` | `upstream.codex` (shared), `client.codex.optimize-multi-agent-v2`, `oauth.providers.codex` (OAuth-only) |
 | `codex-header-defaults` | `oauth.providers.codex.header-defaults` |
-| `claude` | `oauth.providers.claude` |
-| `claude-code` | `oauth.providers.claude.claude-code` |
-| `disable-claude-cloak-mode` | `oauth.providers.claude.disable-claude-cloak-mode` |
-| `claude-header-defaults` | `oauth.providers.claude.header-defaults` |
+| `claude` | `upstream.claude` |
+| `claude-code` | `upstream.claude` |
+| `disable-claude-cloak-mode` | `upstream.claude.disable-claude-cloak-mode` |
+| `claude-header-defaults` | `upstream.claude.header-defaults` |
 | `antigravity` | `oauth.providers.antigravity` |
 | `antigravity-signature-cache-enabled` | `oauth.providers.antigravity.signature-cache-enabled` |
 | `antigravity-signature-bypass-strict` | `oauth.providers.antigravity.signature-bypass-strict` |
 | `quota-exceeded.antigravity-credits` | `oauth.providers.antigravity.antigravity-credits` |
-| `xai` | `oauth.providers.xai` |
+| `xai` | `upstream.xai` |
 | `devin` | `oauth.providers.devin` |
 | `disable-image-generation` | `multimedia.disable-image-generation` |
 | `gpt-image-2-base-model` | `multimedia.gpt-image-2-base-model` |
@@ -4198,7 +4212,7 @@ Each row names a legacy config field/root and its canonical v8 tree location. JS
 
 `plugins`, `user-email`, `user-panel`, the canonical session-affinity settings under `routing`, and `quota-exceeded.switch-project` / `switch-preview-model` retain their names. `quota-exceeded.antigravity-credits` moves into the Antigravity OAuth provider subtree. Upstream arrays become grouped `api-keys.<provider>` lists; compatibility `api-key-entries` becomes `keys`. The client-key string list moves from the legacy config array `api-keys` to `access.api-keys`; replacing it still reconciles the live key table. Rich key records use the `/access/api-keys` resource API.
 
-Startup/import parsing accepts legacy and mixed layouts. When both versions of a field exist, explicit v8 presence wins, including `false`, `0`, and empty collections. v8 writes require the canonical layout and reject legacy/unknown fields rather than silently accepting them. Use the v8 GET response to obtain a migrated tree, retain read-only revisions and credential IDs, then use subtree PATCH/PUT or a complete replacement.
+Startup/import parsing accepts legacy and mixed layouts. When both versions of a field exist, explicit v8 presence wins, including `false`, `0`, and empty collections. Historical v8 provider/client paths and request bodies remain accepted as aliases; writes use the canonical layout and still reject unknown fields. Retain read-only revisions and credential IDs when using subtree PATCH/PUT or a complete replacement.
 
 ### Legacy Config Reads and Full YAML Replacement
 
