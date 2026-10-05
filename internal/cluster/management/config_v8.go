@@ -40,6 +40,7 @@ func (h *Handler) ConfigV8(c *gin.Context) {
 			return
 		}
 		root := doc.Content[0]
+		config.ProjectV8ConfigAliases(root, strings.Join(parts, "."))
 		if !yamlRequest {
 			if servers := configV8Node(root, v8ICEServersPath); servers != nil && servers.Kind == yaml.SequenceNode {
 				for _, server := range servers.Content {
@@ -150,6 +151,7 @@ func (e *configV8ResponseError) Error() string { code, _ := e.body["error"].(str
 func updateConfigV8Document(doc *yaml.Node, parts []string, update *yaml.Node, method string, yamlRequest bool) (map[string]any, bool, error) {
 	root := doc.Content[0]
 	before := cloneConfigV8Node(root)
+	config.ProjectV8ConfigAliases(root, strings.Join(parts, "."))
 	if method == http.MethodDelete {
 		if len(parts) == 0 {
 			return nil, false, &configV8ResponseError{http.StatusBadRequest, gin.H{"error": "cannot_delete_config"}}
@@ -158,6 +160,12 @@ func updateConfigV8Document(doc *yaml.Node, parts []string, update *yaml.Node, m
 			return nil, false, &configV8ResponseError{http.StatusNotFound, gin.H{"error": "not_found"}}
 		}
 	} else {
+		if len(parts) == 0 {
+			update = cloneConfigV8Node(update)
+			if err := config.NormalizeV8ConfigAliases(update); err != nil {
+				return nil, false, &configV8ResponseError{http.StatusBadRequest, gin.H{"error": "invalid_config", "message": err.Error()}}
+			}
+		}
 		// Paths identify YAML keys, never array indexes. Lists are replaced whole.
 		dst := root
 		for _, part := range parts {
@@ -176,6 +184,9 @@ func updateConfigV8Document(doc *yaml.Node, parts []string, update *yaml.Node, m
 		} else {
 			*dst = *cloneConfigV8Node(update)
 		}
+	}
+	if err := config.NormalizeV8ConfigAliases(root); err != nil {
+		return nil, false, &configV8ResponseError{http.StatusBadRequest, gin.H{"error": "invalid_config", "message": err.Error()}}
 	}
 	if !yamlRequest && method != http.MethodDelete {
 		preserveV8TURNSecrets(root, before)

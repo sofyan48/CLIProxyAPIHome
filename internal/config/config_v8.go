@@ -21,6 +21,43 @@ var v8FieldIndexes = make(map[string][]int)
 var v8StructPaths []configPath
 var v8Paths = buildV8Paths()
 
+// Client paths win by presence. Historical OAuth paths precede legacy globals.
+var v8ClientPaths = []configPath{
+	{"oauth.providers.codex.optimize-multi-agent-v2", "client.codex.optimize-multi-agent-v2"},
+	{"providers.codex.optimize-multi-agent-v2", "client.codex.optimize-multi-agent-v2"},
+}
+
+// Canonical upstream fields win by presence; historical OAuth fields precede globals.
+var v8SharedPaths = []configPath{
+	{"oauth.providers.codex.disable-codex-cloaking", "upstream.codex.disable-codex-cloaking"},
+	{"oauth.providers.codex.stream-bootstrap-buffering", "upstream.codex.stream-bootstrap-buffering"},
+	{"oauth.providers.codex.stream-bootstrap-timeout", "upstream.codex.stream-bootstrap-timeout"},
+	{"oauth.providers.codex.orphan-delegation-compatibility", "upstream.codex.orphan-delegation-compatibility"},
+	{"oauth.providers.codex.model-level-cooling", "upstream.codex.model-level-cooling"},
+	{"oauth.providers.codex.response-steering", "upstream.codex.response-steering"},
+	{"oauth.providers.claude.model-level-cooling", "upstream.claude.model-level-cooling"},
+	{"oauth.providers.claude.claude-code.disable-cloaking-model-list", "upstream.claude.disable-cloaking-model-list"},
+	{"oauth.providers.claude.disable-claude-cloak-mode", "upstream.claude.disable-claude-cloak-mode"},
+	{"oauth.providers.claude.header-defaults.user-agent", "upstream.claude.header-defaults.user-agent"},
+	{"oauth.providers.claude.header-defaults.package-version", "upstream.claude.header-defaults.package-version"},
+	{"oauth.providers.claude.header-defaults.runtime-version", "upstream.claude.header-defaults.runtime-version"},
+	{"oauth.providers.claude.header-defaults.os", "upstream.claude.header-defaults.os"},
+	{"oauth.providers.claude.header-defaults.arch", "upstream.claude.header-defaults.arch"},
+	{"oauth.providers.claude.header-defaults.timeout", "upstream.claude.header-defaults.timeout"},
+	{"oauth.providers.claude.header-defaults.timezone", "upstream.claude.header-defaults.timezone"},
+	{"oauth.providers.claude.header-defaults.stabilize-device-profile", "upstream.claude.header-defaults.stabilize-device-profile"},
+	{"oauth.providers.xai.inject-x-search", "upstream.xai.inject-x-search"},
+}
+
+var v8Aliases = append(append([]configPath(nil), v8ClientPaths...), v8SharedPaths...)
+
+var v8SharedStructPaths = []configPath{
+	{"oauth.providers.claude.header-defaults", "upstream.claude.header-defaults"},
+	{"oauth.providers.claude.claude-code", "upstream.claude"},
+	{"oauth.providers.claude", "upstream.claude"},
+	{"oauth.providers.xai", "upstream.xai"},
+}
+
 var v8KeyFamilies = []configPath{
 	{"gemini-api-key", "gemini"}, {"interactions-api-key", "interactions"},
 	{"vertex-api-key", "vertex"}, {"codex-api-key", "codex"},
@@ -44,15 +81,22 @@ func buildV8Paths() []configPath {
 		{"auth-dir", "oauth.auth-dir"}, {"auth-auto-refresh-workers", "oauth.auth-auto-refresh-workers"},
 		{"oauth-model-alias", "oauth.model-alias"}, {"oauth-excluded-models", "oauth.excluded-models"},
 		{"oauth-request-scoped-errors", "oauth.request-scoped-errors"}, {"ws-auth", "oauth.providers.aistudio.ws-auth"},
+		{"codex.disable-codex-cloaking", "upstream.codex.disable-codex-cloaking"},
+		{"codex.stream-bootstrap-buffering", "upstream.codex.stream-bootstrap-buffering"},
+		{"codex.stream-bootstrap-timeout", "upstream.codex.stream-bootstrap-timeout"},
+		{"codex.optimize-multi-agent-v2", "client.codex.optimize-multi-agent-v2"},
+		{"codex.orphan-delegation-compatibility", "upstream.codex.orphan-delegation-compatibility"},
+		{"codex.model-level-cooling", "upstream.codex.model-level-cooling"},
+		{"codex.response-steering", "upstream.codex.response-steering"},
 		{"codex", "oauth.providers.codex"}, {"codex-header-defaults", "oauth.providers.codex.header-defaults"},
-		{"claude", "oauth.providers.claude"}, {"claude-code", "oauth.providers.claude.claude-code"},
-		{"disable-claude-cloak-mode", "oauth.providers.claude.disable-claude-cloak-mode"},
-		{"claude-header-defaults", "oauth.providers.claude.header-defaults"},
+		{"claude", "upstream.claude"}, {"claude-code", "upstream.claude"},
+		{"disable-claude-cloak-mode", "upstream.claude.disable-claude-cloak-mode"},
+		{"claude-header-defaults", "upstream.claude.header-defaults"},
 		{"antigravity", "oauth.providers.antigravity"},
 		{"antigravity-signature-cache-enabled", "oauth.providers.antigravity.signature-cache-enabled"},
 		{"antigravity-signature-bypass-strict", "oauth.providers.antigravity.signature-bypass-strict"},
 		{"quota-exceeded.antigravity-credits", "oauth.providers.antigravity.antigravity-credits"},
-		{"xai", "oauth.providers.xai"}, {"devin", "oauth.providers.devin"},
+		{"xai", "upstream.xai"}, {"devin", "oauth.providers.devin"},
 		{"disable-image-generation", "multimedia.disable-image-generation"}, {"gpt-image-2-base-model", "multimedia.gpt-image-2-base-model"},
 		{"video-result-auth-cache-ttl", "multimedia.video-result-auth-cache-ttl"},
 		{"debug", "observability.logs.debug"}, {"logging-to-file", "observability.logs.logging-to-file"},
@@ -201,7 +245,7 @@ func flattenV8(node *yaml.Node) (*yaml.Node, error) {
 	if _, err := normalizeLegacyConfigFields(node, true); err != nil {
 		return nil, err
 	}
-	for _, path := range v8Paths {
+	for _, path := range append(append([]configPath(nil), v8Paths...), v8Aliases...) {
 		parts := strings.Split(path.current, ".")
 		for i := 1; i < len(parts); i++ {
 			parent := yamlPath(node, strings.Join(parts[:i], "."))
@@ -218,6 +262,32 @@ func flattenV8(node *yaml.Node) (*yaml.Node, error) {
 		}
 	}
 	root := deepCopyYAMLNode(node)
+	for _, path := range v8Aliases {
+		if value := yamlPath(root, path.old); value != nil {
+			if yamlPath(root, path.current) == nil {
+				setYAMLPath(root, path.current, value)
+			}
+			deleteYAMLPath(root, path.old)
+		}
+	}
+	for _, path := range v8SharedStructPaths {
+		value := yamlPath(root, path.old)
+		if value == nil {
+			continue
+		}
+		if value.Tag != "!!null" && value.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("%s must be a mapping", path.old)
+		}
+		if value.Tag != "!!null" && len(value.Content) != 0 {
+			continue
+		}
+		if yamlPath(root, path.current) == nil {
+			copy := copyYAMLPathValue(root, path.old)
+			copy.Kind, copy.Tag, copy.Value = yaml.MappingNode, "!!map", ""
+			setYAMLPathWithComments(root, path.current, copy)
+		}
+		deleteYAMLPath(root, path.old)
+	}
 	if version := yamlPath(root, "config-version"); version != nil && (version.Tag != "!!int" || version.Value != "8") {
 		return nil, fmt.Errorf("unsupported config-version (expected 8)")
 	}
@@ -226,9 +296,10 @@ func flattenV8(node *yaml.Node) (*yaml.Node, error) {
 		deleteYAMLPath(root, "api-keys")
 	}
 	for _, path := range v8Paths {
-		if value := yamlPath(node, path.current); value != nil {
+		if value := yamlPath(root, path.current); value != nil {
+			copy := copyYAMLPathValue(root, path.current)
 			deleteYAMLPath(root, path.current)
-			setYAMLPath(root, path.old, value)
+			setYAMLPathWithComments(root, path.old, copy)
 		}
 	}
 	for _, family := range v8KeyFamilies {
@@ -359,8 +430,8 @@ func NormalizeConfigLayout(data []byte, migrate bool) ([]byte, bool, error) {
 	}
 	// Empty legacy structs have no leaf fields to move. Preserve them as empty v8
 	// mappings; null structs also mean defaults. User-owned maps are not included.
-	paths := append([]configPath(nil), v8Paths...)
-	for _, path := range v8StructPaths {
+	paths := append(append([]configPath(nil), v8Aliases...), v8Paths...)
+	for _, path := range append(append([]configPath(nil), v8StructPaths...), v8SharedStructPaths...) {
 		old := yamlPath(root, path.old)
 		if old == nil || (!migrate && yamlPath(root, path.current) == nil) {
 			continue
@@ -381,20 +452,10 @@ func NormalizeConfigLayout(data []byte, migrate bool) ([]byte, bool, error) {
 		if current == nil && !migrate {
 			continue
 		}
-		copy := deepCopyYAMLNode(old)
-		// A leading field comment belongs to its key node in yaml.v3. Carry it
-		// with the value when moving that key into a different mapping.
-		parts := strings.Split(path.old, ".")
-		parent := root
-		if len(parts) > 1 {
-			parent = yamlPath(root, strings.Join(parts[:len(parts)-1], "."))
-		}
-		if idx := findMapKeyIndex(parent, parts[len(parts)-1]); idx >= 0 {
-			copy.HeadComment = strings.TrimSpace(parent.Content[idx].HeadComment + "\n" + copy.HeadComment)
-		}
+		copy := copyYAMLPathValue(root, path.old)
 		deleteYAMLPath(root, path.old)
 		if current == nil {
-			setYAMLPath(root, path.current, copy)
+			setYAMLPathWithComments(root, path.current, copy)
 		}
 		changed = true
 	}
@@ -567,7 +628,7 @@ func ValidateV8Config(data []byte) error {
 			return fmt.Errorf("removed configuration field %s is not accepted by v8", path)
 		}
 	}
-	for _, path := range v8Paths {
+	for _, path := range append(append(append([]configPath(nil), v8Paths...), v8Aliases...), v8SharedStructPaths...) {
 		if legacyPath(root, path.old) != nil {
 			return fmt.Errorf("legacy field %s is not accepted by v8; use %s", path.old, path.current)
 		}
@@ -616,6 +677,7 @@ func ValidateV8Config(data []byte) error {
 	if errUserPanel := (*Config)(&cfg).NormalizeAndValidateUserPanelConfig(); errUserPanel != nil {
 		return errUserPanel
 	}
-	_, errParse := cpaconfig.ParseConfigBytes(data)
+	// Validate the compatible runtime projection with the bundled CPA SDK.
+	_, errParse := cpaconfig.ParseConfigBytes(encoded)
 	return errParse
 }

@@ -17,8 +17,9 @@ func TestOAuthConfigUpsertAndSnapshotMutationSerializePostgres(t *testing.T) {
 			repo := newPostgresQuiescenceRepository(t)
 			ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancelCtx()
+			// Keep both mutations OAuth-scoped so they contend over the same stored root.
 			if errSeed := repo.ReplaceConfigSnapshot(ctx, map[string]any{"oauth": map[string]any{"providers": map[string]any{
-				"codex":       map[string]any{"disable-codex-cloaking": false},
+				"codex":       map[string]any{"header-defaults": map[string]any{"user-agent": "old-agent"}},
 				"antigravity": map[string]any{"sensitive-words": []string{"old"}},
 			}}}); errSeed != nil {
 				t.Fatal(errSeed)
@@ -31,7 +32,7 @@ func TestOAuthConfigUpsertAndSnapshotMutationSerializePostgres(t *testing.T) {
 				"v8": func(updateCtx context.Context, updateRepo *Repository) error {
 					return updateRepo.MutateConfigSnapshot(updateCtx, DefaultHeartbeatTimeout(), func(root map[string]any) (map[string]any, error) {
 						providers := root["oauth"].(map[string]any)["providers"].(map[string]any)
-						providers["codex"].(map[string]any)["disable-codex-cloaking"] = true
+						providers["codex"].(map[string]any)["header-defaults"].(map[string]any)["user-agent"] = "new-agent"
 						return root, nil
 					})
 				},
@@ -109,7 +110,7 @@ func TestOAuthConfigUpsertAndSnapshotMutationSerializePostgres(t *testing.T) {
 			if errConfig != nil {
 				t.Fatal(errConfig)
 			}
-			if !cfg.Codex.DisableCodexCloaking || !reflect.DeepEqual(cfg.Antigravity.SensitiveWords, []string{"new"}) {
+			if cfg.CodexHeaderDefaults.UserAgent != "new-agent" || !cfg.OAuthOnlyFields["codex-header-defaults.user-agent"] || !reflect.DeepEqual(cfg.Antigravity.SensitiveWords, []string{"new"}) {
 				t.Fatal("a committed config mutation was overwritten by a stale OAuth scope")
 			}
 		})

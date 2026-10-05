@@ -20,7 +20,7 @@ oauth:
   auth-dir: secret-auth-dir
   model-alias: {codex: [{name: hidden-model, alias: hidden-alias}]}
   providers:
-    codex: {disable-codex-cloaking: true}
+    codex: {disable-codex-cloaking: true, header-defaults: {user-agent: oauth-agent}}
     aistudio: {ws-auth: true}
 routing:
   cooldown: {disable-cooling: false}
@@ -43,8 +43,8 @@ observability:
 	if cpa.Port != 8427 || !cpa.DisableCooling || !cpa.UsageStatisticsEnabled || cpa.WebsocketAuth {
 		t.Fatal("Home invariants lost")
 	}
-	if !cpa.Codex.DisableCodexCloaking || cpa.ForAPIKey().Codex.DisableCodexCloaking {
-		t.Fatal("OAuth provider scope lost")
+	if !cpa.Codex.DisableCodexCloaking || !cpa.ForAPIKey().Codex.DisableCodexCloaking || cpa.CodexHeaderDefaults.UserAgent != "oauth-agent" || cpa.ForAPIKey().CodexHeaderDefaults.UserAgent != "" {
+		t.Fatal("shared client settings or OAuth-only header scope lost")
 	}
 	if !strings.Contains(string(data), "disable-codex-cloaking: true") || !strings.Contains(string(data), "port: 8427") {
 		t.Fatal("legacy projection missing")

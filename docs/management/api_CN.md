@@ -330,7 +330,7 @@ Authorization: Bearer <MANAGEMENT_KEY>
 
 `GET` 返回同一份持久化 v8 配置树的 YAML，响应类型为 `application/yaml; charset=utf-8`，并设置 `Cache-Control: no-store`。内容从数据库重建，不保留原始注释、排版或分组方式。
 
-`PUT` 接收完整 v8 YAML 对象，遵循与 `PUT /config` 相同的完整替换、校验、凭证协调和只读字段规则。未注册 `PATCH /config.yaml`。尽管启动和导入支持旧布局及混合文件，v8 管理写入仍拒绝旧布局或混合布局；迁移时先通过 v8 的 `/config.yaml` 读取规范化文档。
+`PUT` 接收完整 v8 YAML 对象，遵循与 `PUT /config` 相同的完整替换、校验、凭证协调和只读字段规则。未注册 `PATCH /config.yaml`。旧 V8 provider/client 字段作为别名接受，写入使用最新布局；其他旧字段和未知字段仍拒绝。
 
 JSON 写入仅在新旧 ICE server 的 `urls` 列表内容和顺序相同时保留被省略的 TURN `username` / `credential`。显式 `""` 或 `null` 清空对应秘密字段；修改 URL 后不会继承另一服务器的秘密字段。YAML 完整替换不恢复省略的 TURN 凭据。
 
@@ -340,7 +340,7 @@ JSON 写入仅在新旧 ICE server 的 `urls` 列表内容和顺序相同时保�
 | --- | --- | --- |
 | `400` | `invalid_json`、`invalid_body`、`config_must_be_object` | 请求格式错误或完整配置不是对象。 |
 | `400` | `invalid_path`、`cannot_delete_config` | 路径遍历不支持，或尝试删除配置根节点。 |
-| `400` | `invalid_config` | 未知或旧字段、不支持的版本/provider、类型错误、分组或权重不合法。提交 `config-version` 时必须为整数 `8`。 |
+| `400` | `invalid_config` | 未知字段或不支持的旧字段、不支持的版本/provider、类型错误、分组或权重不合法。提交 `config-version` 时必须为整数 `8`。 |
 | `400` | `read_only_field` | 修改或删除了 Home 管理的 revision；`field` 返回 `/` 分隔的字段路径。 |
 | `404` | `not_found` | 所选配置字段不存在。 |
 | `409` | `credential_identity_conflict` | 凭证身份与持久化记录冲突。 |
@@ -373,6 +373,19 @@ Payload 规则使用 `/config/requests/payload`，Antigravity OAuth 配置使用
 ```
 
 `oauth.providers` 下的设置仅作用于 OAuth。API Key 凭证使用自己的分组/key 选项，不会隐式继承 v8 OAuth provider 配置。
+
+共享的提供商默认设置放在顶层 `upstream`：`upstream.codex`、
+`upstream.claude`（包含 `header-defaults` 和 `disable-cloaking-model-list`）
+以及 `upstream.xai`。这些设置在原有执行条件下同时作用于 OAuth 和 API Key 请求，
+凭据自身的显式设置仍保留原有优先级。认证目录和刷新并发使用
+`oauth.auth-dir`、`oauth.auth-auto-refresh-workers`；
+`client` 保留客户端专属配置，例如 `client.codex.optimize-multi-agent-v2`。
+
+启动和导入兼容旧 OAuth 路径和旧扁平字段。规范路径按字段是否存在取得优先权，
+包括显式 `false`、`0`、空字符串和 `null`；没有规范字段时，旧 OAuth 路径优先于
+扁平字段。旧 V8 provider/client 路径和请求体仍可使用，写入使用规范名称。
+Home 在数据库和下发配置中保留兼容的
+运行时字段投影，让当前依赖的 CPA SDK 也能消费共享值。
 
 #### Credential concurrency lifecycle 字段
 
@@ -3963,13 +3976,13 @@ Query 参数：
 | `oauth.providers.codex.header-defaults.user-agent` | string | 默认 Codex User-Agent。 |
 | `oauth.providers.codex.header-defaults.beta-features` | string | 默认 Codex websocket beta features header。 |
 | `api-keys.claude` | 分组数组 | 上游 claude 分组，每组包含 `keys`；见上游 API Key 配置章节。 |
-| `oauth.providers.claude.header-defaults.user-agent` | string | 默认 Claude User-Agent。 |
-| `oauth.providers.claude.header-defaults.package-version` | string | 默认 Claude package version。 |
-| `oauth.providers.claude.header-defaults.runtime-version` | string | 默认 Claude runtime version。 |
-| `oauth.providers.claude.header-defaults.os` | string | 默认 Claude OS fingerprint。 |
-| `oauth.providers.claude.header-defaults.arch` | string | 默认 Claude architecture fingerprint。 |
-| `oauth.providers.claude.header-defaults.timeout` | string | 默认 Claude timeout header。 |
-| `oauth.providers.claude.header-defaults.stabilize-device-profile` | boolean pointer | 启用固定 Claude device profile baseline。 |
+| `upstream.claude.header-defaults.user-agent` | string | 默认 Claude User-Agent。 |
+| `upstream.claude.header-defaults.package-version` | string | 默认 Claude package version。 |
+| `upstream.claude.header-defaults.runtime-version` | string | 默认 Claude runtime version。 |
+| `upstream.claude.header-defaults.os` | string | 默认 Claude OS fingerprint。 |
+| `upstream.claude.header-defaults.arch` | string | 默认 Claude architecture fingerprint。 |
+| `upstream.claude.header-defaults.timeout` | string | 默认 Claude timeout header。 |
+| `upstream.claude.header-defaults.stabilize-device-profile` | boolean pointer | 启用固定 Claude device profile baseline。 |
 | `api-keys.openai-compatibility` | 分组数组 | 上游 openai-compatibility 分组，每组包含 `keys`；见上游 API Key 配置章节。 |
 | `api-keys.vertex` | 分组数组 | 上游 vertex 分组，每组包含 `keys`；见上游 API Key 配置章节。 |
 | `oauth.excluded-models` | object string to array of string | 每个 provider 的 OAuth/file-backed auth 排除模型。 |
@@ -4003,27 +4016,27 @@ Query 参数：
 | `routing.cooldown.transient-error-cooldown-seconds` | integer | 随配置携带的 CPA 临时错误冷却设置。 |
 | `oauth.providers.aistudio.ws-auth` | boolean | Home 规范化为 `false`。 |
 | `oauth.request-scoped-errors` | provider 到 rule array 的对象 | OAuth 请求级错误覆盖规则。 |
-| `oauth.providers.codex.disable-codex-cloaking` | boolean | 不再强制注入 Codex OAuth 官方身份请求头。 |
-| `oauth.providers.codex.stream-bootstrap-buffering` | boolean | 缓冲生成前帧，允许在提交流前切换凭证，默认 `false`。 |
-| `oauth.providers.codex.stream-bootstrap-timeout` | duration string | 可选启动缓冲时间上限；`0` 仅使用帧数/字节数上限。 |
-| `oauth.providers.codex.optimize-multi-agent-v2` | boolean | 优化官方 Codex 多代理请求。 |
-| `oauth.providers.codex.orphan-delegation-compatibility` | boolean | 兼容孤立委派输出。 |
-| `oauth.providers.codex.model-level-cooling` | boolean | 将 Codex 额度冷却限定到模型。 |
-| `oauth.providers.codex.response-steering` | boolean | 启用全双工 Codex WebSocket response steering。 |
+| `upstream.codex.disable-codex-cloaking` | boolean | 不再强制注入 Codex OAuth 和 API Key 请求的官方身份请求头。 |
+| `upstream.codex.stream-bootstrap-buffering` | boolean | 缓冲生成前帧，允许在提交流前切换凭证，默认 `false`。 |
+| `upstream.codex.stream-bootstrap-timeout` | duration string | 可选启动缓冲时间上限；`0` 仅使用帧数/字节数上限。 |
+| `client.codex.optimize-multi-agent-v2` | boolean | 优化官方 Codex 多代理请求。 |
+| `upstream.codex.orphan-delegation-compatibility` | boolean | 兼容孤立委派输出。 |
+| `upstream.codex.model-level-cooling` | boolean | 将 Codex 额度冷却限定到模型。 |
+| `upstream.codex.response-steering` | boolean | 启用全双工 Codex WebSocket response steering。 |
 | `oauth.providers.codex.live-media-relay.enabled` | boolean | 启用 Codex Live WebRTC 中继。 |
 | `oauth.providers.codex.live-media-relay.max-sessions` | integer | 中继会话上限。 |
 | `oauth.providers.codex.live-media-relay.disable-private-remote-ips` | boolean | 启用时拒绝私网远端媒体地址。 |
 | `oauth.providers.codex.live-media-relay.public-ip` | string | 中继公布的地址。 |
 | `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | 中继 UDP 端口范围。 |
 | `oauth.providers.codex.live-media-relay.ice-servers` | object array | 每项包含 `urls` 和可选 `username` / `credential`；JSON 读取隐藏后两者。 |
-| `oauth.providers.claude.model-level-cooling` | boolean | 将 Claude 额度冷却限定到模型。 |
-| `oauth.providers.claude.disable-claude-cloak-mode` | boolean | 禁用 Claude OAuth cloaking。 |
-| `oauth.providers.claude.claude-code.disable-cloaking-model-list` | boolean | 禁用 Anthropic 模型列表响应中的模型 ID cloaking。 |
-| `oauth.providers.claude.header-defaults.timezone` | string | Claude 请求头指纹的 timezone 默认值。 |
+| `upstream.claude.model-level-cooling` | boolean | 将 Claude 额度冷却限定到模型。 |
+| `upstream.claude.disable-claude-cloak-mode` | boolean | 禁用 Claude OAuth 和显式启用 CLI 指纹的 API Key 请求的 cloaking。 |
+| `upstream.claude.disable-cloaking-model-list` | boolean | 禁用 Anthropic 模型列表响应中的模型 ID cloaking。 |
+| `upstream.claude.header-defaults.timezone` | string | Claude 请求头指纹的 timezone 默认值。 |
 | `oauth.providers.antigravity.connection-pool.enabled` | optional boolean | 启用上游连接池，默认 `false`。 |
 | `oauth.providers.antigravity.connection-pool.idle-conn-timeout` | duration string | 空闲超时，默认 `30s`，最大 `210s`。 |
 | `oauth.providers.antigravity.connection-pool.max-idle-conns-per-host` | optional integer | 每凭证每 host 的空闲连接数，默认 `2`。 |
-| `oauth.providers.xai.inject-x-search` | boolean | 请求未提供时注入原生 `x_search`。 |
+| `upstream.xai.inject-x-search` | boolean | 请求未提供时注入原生 `x_search`。 |
 | `oauth.providers.devin.sensitive-words` | string array | system prompt/消息中需要混淆的词。 |
 | `oauth.model-alias.*[].display-name` | string | 可选目录显示名覆盖。 |
 | `multimedia.gpt-image-2-base-model` | string | GPT Image 2 请求使用的基础模型。 |
@@ -4163,17 +4176,17 @@ v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state �
 | `oauth-excluded-models` | `oauth.excluded-models` |
 | `oauth-request-scoped-errors` | `oauth.request-scoped-errors` |
 | `ws-auth` | `oauth.providers.aistudio.ws-auth` |
-| `codex` | `oauth.providers.codex` |
+| `codex` | `upstream.codex`（共享）、`client.codex.optimize-multi-agent-v2`、`oauth.providers.codex`（OAuth 专用） |
 | `codex-header-defaults` | `oauth.providers.codex.header-defaults` |
-| `claude` | `oauth.providers.claude` |
-| `claude-code` | `oauth.providers.claude.claude-code` |
-| `disable-claude-cloak-mode` | `oauth.providers.claude.disable-claude-cloak-mode` |
-| `claude-header-defaults` | `oauth.providers.claude.header-defaults` |
+| `claude` | `upstream.claude` |
+| `claude-code` | `upstream.claude` |
+| `disable-claude-cloak-mode` | `upstream.claude.disable-claude-cloak-mode` |
+| `claude-header-defaults` | `upstream.claude.header-defaults` |
 | `antigravity` | `oauth.providers.antigravity` |
 | `antigravity-signature-cache-enabled` | `oauth.providers.antigravity.signature-cache-enabled` |
 | `antigravity-signature-bypass-strict` | `oauth.providers.antigravity.signature-bypass-strict` |
 | `quota-exceeded.antigravity-credits` | `oauth.providers.antigravity.antigravity-credits` |
-| `xai` | `oauth.providers.xai` |
+| `xai` | `upstream.xai` |
 | `devin` | `oauth.providers.devin` |
 | `disable-image-generation` | `multimedia.disable-image-generation` |
 | `gpt-image-2-base-model` | `multimedia.gpt-image-2-base-model` |
@@ -4197,7 +4210,7 @@ v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state �
 
 `plugins`、`user-email`、`user-panel`、`routing` 下的规范 session-affinity 设置，以及 `quota-exceeded.switch-project` / `switch-preview-model` 保留原名。`quota-exceeded.antigravity-credits` 移入 Antigravity OAuth provider 子树。上游数组变为 `api-keys.<provider>` 分组列表，兼容 provider 的 `api-key-entries` 改为 `keys`。客户端 key 字符串列表从旧 `api-keys` 数组移到 `access.api-keys`，替换它仍会协调运行时 key 表；完整 key 记录使用 `/access/api-keys` 资源接口。
 
-启动/导入解析接受旧布局和混合布局。同一字段同时出现新旧值时，显式 v8 字段优先，包括 `false`、`0` 和空集合。v8 管理写入只接受规范布局，对旧字段或未知字段报错。迁移时先读取 v8 GET 响应，保留只读 revision 和凭证 ID，再执行子树 PATCH/PUT 或完整替换。
+启动/导入解析接受旧布局和混合布局。同一字段同时出现新旧值时，显式 v8 字段优先，包括 `false`、`0` 和空集合。旧 V8 provider/client 路径和请求体作为别名接受，写入使用规范布局，未知字段仍拒绝。执行子树 PATCH/PUT 或完整替换时，保留只读 revision 和凭证 ID。
 
 ### 旧配置读取与 YAML 完整替换
 
