@@ -41,3 +41,6 @@ plugins
 .superpowers/
 .air.toml
 tmp/
+
+helm/*.tgz
+helm/values.yml
