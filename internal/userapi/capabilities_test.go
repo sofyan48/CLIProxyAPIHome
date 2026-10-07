@@ -14,6 +14,7 @@ type userCapabilitiesPayload struct {
 		EmailVerification bool `json:"email_verification"`
 		PasswordRecovery  bool `json:"password_recovery"`
 		ModelCatalog      bool `json:"model_catalog"`
+		TopupApproval     bool `json:"topup_approval"`
 	} `json:"capabilities"`
 	ServerInfo struct {
 		HomeVersion   string `json:"home_version"`
@@ -41,6 +42,9 @@ func TestUserCapabilitiesReflectUsableConfiguration(t *testing.T) {
 			}
 			// The catalog is served from the model registry, so it stays
 			// advertised on a Home that cannot send mail at all.
+			if !body.Capabilities.TopupApproval {
+				t.Error("topup_approval = false, want true")
+			}
 			if !body.Capabilities.ModelCatalog {
 				t.Errorf("model_catalog = false, want true")
 			}

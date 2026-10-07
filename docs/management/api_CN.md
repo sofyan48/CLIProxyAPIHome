@@ -245,6 +245,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/users` |
 | `POST` | `/users` |
 | `POST` | `/users/:id/approve` |
+| `POST` | `/users/:id/topup/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
@@ -1035,6 +1036,28 @@ Path 参数：
 
 用户记录包含 `period_limits_summary`：由记录本身推导的轻量概览（不查询用量）。`enabled_windows` 列出已配置限额的窗口（`5h`/`1d`/`7d`/`30d`），`zero_limit_windows` 列出限额为 `0`（立即阻断）的窗口。实时 used/remaining 请使用 `GET /users/:id/period-limits`。
 
+### 自助充值批准
+
+`GET /users` 和 `GET /users/:id` 的用户对象增加 `pending_topup`：没有待批准申请时为 `null`，否则为 `{id,user_id,amount,note,status,created_at}`。ID 为数字，状态为 `pending`，时间为 RFC3339。列表通过一次查询批量读取申请，不逐用户查询。此契约支持 **Users & Access 用户列表** 的批准操作，本次不修改 UI。账号批准（`approval_pending`、`/users/:id/approve`）独立且保持不变。
+
+#### POST `/users/:id/topup/approve`
+
+必须使用 Management API 认证，普通 User API bearer token 不可使用。请求：`{ "request_id": 123 }`；ID 必填且必须为正整数。金额和备注只读取数据库申请，不使用批准请求中的金额或备注。申请必须属于路径中的用户。
+
+响应：`200 { "user": UserMap, "record": BalanceLedgerRecord, "current_balance": number }`。分类账包含字符串 `id`、`user_id`、`type: "recharge"`、原始 `amount` 和 `note`、`operator: "admin"`、`balance_before`、`balance_after`、`created_at`。批准后 `user.pending_topup` 为 `null`。重复批准返回同一分类账记录及当前余额，不会重复入账；如果用户已经提交新申请，重试旧 ID 会在用户对象中返回新 `pending_topup`，但绝不会批准新申请。
+
+| HTTP | Error | 说明 |
+| --- | --- | --- |
+| 400 | `invalid_request_id` | ID 缺失/null/零/负数/小数/非数字/越界，或请求体非法。 |
+| 400 | `invalid id` | 用户路径 ID 非法，沿用既有验证。 |
+| 400 | `invalid_amount` | 存储金额非法、余额将溢出或 float64 加法无法增加余额；申请保持待批准，分类账和余额不变。 |
+| 401 | Management 认证错误 | 管理密钥缺失或非法，包括使用普通用户 token。 |
+| 404 | `topup_request_not_found` | 用户或申请不存在，或申请属于其他用户。 |
+| 500 | `topup_approve_failed` | 事务失败并回滚。 |
+| 500 | `billing_recharge_request_load_failed` | 响应中的待批准申请读取失败；可安全重试同一 ID。 |
+
+批准锁定用户，在同一事务内更新余额、分类账、`approved` 状态、`ledger_id`、`approved_at` 和 `updated_at`。数据库部分唯一索引保证每个用户最多一笔 `pending` 申请。`credits_unlimited` 保持既有语义：生成分类账但不改变数值余额。申请持久化于 `billing_recharge_request`，数据库/快照版本 9 包含此表；版本 1–8 仍可导入且不包含申请。用户和管理能力 API 均声明 `topup_approval: true`，客户端应依此兼容旧部署。
+
 ### POST `/users`
 
 创建用户。
@@ -1497,7 +1520,7 @@ Query 参数：
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v8/management/billing/overview` 或 `/v8/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-独立的 [User API 计费接口](../user/api_CN.md#billing) 提供 session 范围的 `GET /user/billing/balance-records`、`POST /user/billing/recharge` 和扩展概览。用户充值有意允许无需支付或兑换券的无限制自助增加余额，忽略传入的用户 ID，并将 session 用户记录为操作人。管理员路由保持不变。导致非有限余额的更新会失败并回滚。
+独立的 [User API 计费接口](../user/api_CN.md#billing) 提供 session 范围的分类账、概览、`POST /user/billing/recharge` 和 `GET /user/billing/recharge-request`。自助充值必须由管理员批准：提交返回 HTTP 202，不修改余额、不生成分类账；已有待批准申请时再次提交返回 `409 topup_pending`。管理员通过下述 `/users/:id/topup/approve` 批准，分类账操作人为 `admin`。管理员直接充值/扣减路由保持不变。导致非有限余额的更新会失败并回滚。
 
 只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。三个路由统一使用半开区间 `[from,to)`：包含 `from`，不包含 `to`。可选的 `timezone` 参数是报表时区覆盖，并且必须是 IANA 时区名称。未提供时，路由使用 `/billing/settings.report_timezone`，该设置默认为 `UTC`。纯日期值使用实际报表时区中的日历日期，纯日期形式的 `to` 会规范化为下一个本地零点，因此即使跨越 DST，也会完整包含结束日期。显式时间戳是精确的排他上界，不会因报表时区被移动或扩展。`/billing/overview` 还使用实际报表时区生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。报表时区只控制查询边界和报表分组，不会重新计算不可变 charge、修改价格快照或改变用户余额。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
@@ -2724,6 +2747,7 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.model_channel_bindings` | boolean | model group detail 是否支持通过 `channels` 配置模型级 channel group 绑定。 |
 | `capabilities.topology` | boolean | 是否支持 `GET /topology` Home + CPA 集群拓扑接口。 |
 | `capabilities.users` | boolean | 是否支持 `/users` 用户管理路由。 |
+| `capabilities.topup_approval` | boolean | 自助充值需要批准，支持待批准用户字段和 `/users/:id/topup/approve`；用户能力 API 也声明此字段。 |
 | `capabilities.access_groups` | boolean | 是否支持 `/channel-groups` 与 `/model-groups` 访问范围路由。 |
 | `capabilities.user_period_limits` | boolean | 是否支持用户周期限额配置字段，以及 `GET /users/:id/period-limits` 和 `POST /users/:id/period-limits/reset`。 |
 | `capabilities.credential_in_flight_snapshots` | boolean | 是否支持独立的 CPA in-flight observation snapshot 接口。 |

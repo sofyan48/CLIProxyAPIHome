@@ -245,6 +245,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/users` |
 | `POST` | `/users` |
 | `POST` | `/users/:id/approve` |
+| `POST` | `/users/:id/topup/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
@@ -1036,6 +1037,28 @@ Example response:
 
 User records include `period_limits_summary`, a lightweight overview derived from the record itself (no usage queries): `enabled_windows` lists the windows whose limit is configured (`5h`/`1d`/`7d`/`30d`), and `zero_limit_windows` lists enabled windows with a `0` limit (immediately blocking). Use `GET /users/:id/period-limits` for live used/remaining data.
 
+### Self-topup approval
+
+`GET /users` and `GET /users/:id` include `pending_topup` in each user map: `null` when no request is pending, otherwise `{id,user_id,amount,note,status,created_at}`. IDs are numbers, `status` is `pending`, and `created_at` is RFC3339. The list retrieves pending requests in one query, not per-user queries. This supports approval actions in the **Users & Access user list** without changing the UI here. Account approval (`approval_pending` and `/users/:id/approve`) remains separate and unchanged.
+
+#### POST `/users/:id/topup/approve`
+
+Requires Management API authentication, not a User API bearer token. Request: `{ "request_id": 123 }`; the ID is mandatory and must be a positive integer. Amount and note are read from the stored request, never from the approval payload. The request must belong to `:id`.
+
+Response: `200 { "user": UserMap, "record": BalanceLedgerRecord, "current_balance": number }`. `record` contains `id` (string), `user_id`, `type: "recharge"`, the original `amount` and `note`, `operator: "admin"`, `balance_before`, `balance_after`, and `created_at`. `user.pending_topup` is `null` after approval; `current_balance` is the user's balance at approval/replay. On replay, the same ledger record is returned and funds are not credited again. If a newer request is already pending during replay, `user.pending_topup` reports it, but the old `request_id` never approves it.
+
+| HTTP | Error | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_request_id` | Missing/null/zero/negative/fractional/non-numeric/out-of-range request ID or malformed body. |
+| 400 | `invalid id` | Invalid user path ID (existing user-route validation). |
+| 400 | `invalid_amount` | Stored amount is invalid, resulting balance would overflow, or float64 addition cannot increase the balance. Request remains pending; no ledger/funds change. |
+| 401 | Management authentication error | Missing/invalid administrator secret, including an ordinary User API token. |
+| 404 | `topup_request_not_found` | User/request does not exist or the request belongs to another user. |
+| 500 | `topup_approve_failed` | Transaction failed and rolled back. |
+| 500 | `billing_recharge_request_load_failed` | Pending-request response lookup failed; safe to retry the same ID. |
+
+Approval locks the user and atomically writes the ledger, credits, request status `approved`, `ledger_id`, `approved_at`, and `updated_at`. A database partial unique index permits at most one `pending` request per user. `credits_unlimited` retains existing billing semantics: ledger recorded, numeric balance unchanged. Requests persist in `billing_recharge_request` and are included in schema/snapshot version 9; versions 1–8 remain importable without this table. Both capability APIs advertise `topup_approval: true`; clients should use that flag for older-deployment fallback.
+
 ### POST `/users`
 
 Creates a user.
@@ -1498,7 +1521,7 @@ Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both s
 
 All paths in this section are relative to the Management API base URL, for example `/v8/management/billing/overview` or `/v8/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
-The separate [User API billing endpoints](../user/api.md#billing) provide session-scoped `GET /user/billing/balance-records`, `POST /user/billing/recharge`, and an expanded overview. User recharge intentionally permits unrestricted self-credit without payment or vouchers, ignores supplied user IDs, and records the session user as operator. It does not change these administrator routes. Balance updates that would produce a non-finite balance fail and roll back.
+The separate [User API billing endpoints](../user/api.md#billing) provide session-scoped balance records, overview, `POST /user/billing/recharge`, and `GET /user/billing/recharge-request`. Self-topups now require administrator approval: submission returns HTTP 202 without changing balance or creating a ledger, and a second pending submission returns `409 topup_pending`. Approval uses `/users/:id/topup/approve` below and records `admin` as operator. Administrator direct recharge/deduction routes remain unchanged. Balance updates that would produce a non-finite balance fail and roll back.
 
 Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. All three routes use the half-open interval `[from,to)`: `from` is included and `to` is excluded. The optional `timezone` parameter is a reporting-timezone override and must be an IANA timezone name. When omitted, the routes use `/billing/settings.report_timezone`, which defaults to `UTC`. Date-only values use calendar dates in the applied reporting timezone, and a date-only `to` is normalized to the next local midnight so the whole ending day remains included across DST transitions. Explicit timestamps are exact exclusive boundaries and are not shifted or expanded by the reporting timezone. `/billing/overview` also uses the applied reporting timezone for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. The reporting timezone only controls query boundaries and report grouping; it never reprices immutable charges, changes price snapshots, or mutates user balances. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
@@ -2726,6 +2749,7 @@ Response fields:
 | `capabilities.model_channel_bindings` | boolean | Whether model group details support model-specific channel group bindings through `channels`. |
 | `capabilities.topology` | boolean | Whether `GET /topology` is available for Home + CPA cluster topology. |
 | `capabilities.users` | boolean | Whether the `/users` user-management routes are available. |
+| `capabilities.topup_approval` | boolean | Self-topups require approval; pending user maps and `/users/:id/topup/approve` are available. Also advertised by the User API. |
 | `capabilities.access_groups` | boolean | Whether the `/channel-groups` and `/model-groups` access-scope routes are available. |
 | `capabilities.user_period_limits` | boolean | Whether user period-limit configuration fields plus `GET /users/:id/period-limits` and `POST /users/:id/period-limits/reset` are available. |
 | `capabilities.credential_in_flight_snapshots` | boolean | Whether the independent CPA in-flight observation snapshot APIs are available. |

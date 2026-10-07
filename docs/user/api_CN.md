@@ -1025,11 +1025,30 @@ Authorization: Bearer user.jwt.token
 
 ### POST `/billing/recharge`
 
-**无限制自助增加余额：**直接给 session 用户充值，不验证支付、兑换券或管理员批准。这不是支付集成。每次成功请求都会新增充值，不支持幂等键。
+提交需要**管理员批准**的自助充值申请。提交时不修改余额，也不生成分类账；这不是支付集成。每个用户最多只能有一笔待批准申请，再次提交返回 `409 topup_pending`。
 
-请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。可选 `note` 是字符串，去除首尾空白后存入分类账。提供的 `user_id`、`operator`、`type` 无法修改目标用户或操作类型。
+请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。导致余额溢出、或过小而无法增加 float64 余额的有限金额返回 `400 invalid_amount`。`note` 去除首尾空白后存入申请，批准时复制到分类账。传入的 `user_id`、`operator`、`type` 无法改变目标用户或操作。
 
-响应：`200 { "record": BalanceRecord, "current_balance": number }`。通过 `ApplyBillingBalanceRecord` 在单个数据库事务中更新余额和写入分类账。保留现有 `credits_unlimited` 行为：记录充值但不修改数值余额。认证失败返回 `401`；数据库失败（包括最终余额溢出）返回 `500 billing_recharge_failed`，不会发生部分写入。
+响应为 HTTP **202**，余额保持不变：
+
+```json
+{
+  "request": {
+    "id": 123, "user_id": 1, "amount": 12.5, "note": "可选审计备注",
+    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
+    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
+  },
+  "current_balance": 10
+}
+```
+
+申请 ID 为数字，分类账 ID 为字符串。管理员通过 `POST /v8/management/users/:id/topup/approve` 提交明确的 `request_id` 批准申请。金额仅从数据库读取；余额、分类账、申请状态及批准时间在同一事务内更新，重复批准不会重复入账。保留 `credits_unlimited` 行为：批准时生成分类账但不修改数值余额。未认证返回 `401`，账号尚未批准返回 `403 approval_pending`；数据库错误返回 `500 billing_recharge_failed`，不会部分写入。
+
+### GET `/billing/recharge-request`
+
+仅限认证用户。返回 `200 { "request": RechargeRequest | null }`，字段同上。只读取 session 用户自己的待批准申请，忽略传入的用户 ID。批准后返回 `null`，除非已提交新申请。未认证返回 `401`（账号尚未批准为 `403 approval_pending`）；数据库错误返回 `500 billing_recharge_request_load_failed`。
+
+`GET /user/capabilities` 与 `GET /v8/management/capabilities` 均声明 `capabilities.topup_approval: true`。客户端应依此启用批准流程；字段缺失或为 false 表示旧部署未声明支持此契约。申请持久化于 `billing_recharge_request`；数据库/快照版本 9 保存待批准及已批准申请。旧版快照仍可导入，但不包含充值申请。
 
 ### GET `/billing/charges`
 

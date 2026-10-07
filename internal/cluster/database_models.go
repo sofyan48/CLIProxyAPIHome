@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 8
+const currentDatabaseVersion = 9
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -321,7 +321,11 @@ var databaseSnapshotV7Models = append(append([]databaseModel(nil), databaseSnaps
 )
 
 // homeDatabaseModels is the current database snapshot registry.
-var homeDatabaseModels = databaseSnapshotV8ModelRegistry()
+var databaseSnapshotV8Models = databaseSnapshotV8ModelRegistry()
+
+var homeDatabaseModels = append(append([]databaseModel(nil), databaseSnapshotV8Models...),
+	newDatabaseModel[BillingRechargeRequestRecord]("billing_recharge_request", []string{"id"}, true, true),
+)
 
 func databaseSnapshotV8ModelRegistry() []databaseModel {
 	models := append([]databaseModel(nil), databaseSnapshotV7Models...)
@@ -419,6 +423,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV6Models, true
 	case 7:
 		return databaseSnapshotV7Models, true
+	case 8:
+		return databaseSnapshotV8Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

@@ -63,7 +63,7 @@ func TestUserApprovalMigrationAndSnapshotCompatibility(t *testing.T) {
 			}
 			userType := databaseSnapshotModelType(t, models, "user").Elem()
 			_, hasApproval := userType.FieldByName("ApprovalPending")
-			if hasApproval != (version == currentDatabaseVersion) {
+			if hasApproval != (version >= 8) {
 				t.Fatal("legacy user snapshot shape changed")
 			}
 			path := filepath.Join(t.TempDir(), "snapshot.zip")
@@ -87,7 +87,7 @@ func TestUserApprovalMigrationAndSnapshotCompatibility(t *testing.T) {
 			if errLoad := target.First(&restored, oldUser.ID).Error; errLoad != nil {
 				t.Fatal(errLoad)
 			}
-			if restored.ApprovalPending != (version == currentDatabaseVersion) || restored.Username != "legacy" || restored.Password != "hash" {
+			if restored.ApprovalPending != (version >= 8) || restored.Username != "legacy" || restored.Password != "hash" {
 				t.Fatalf("snapshot approval compatibility failed: %+v", restored)
 			}
 		})

@@ -1,6 +1,7 @@
 package userapi
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -39,7 +40,7 @@ func (h *Handler) ListCurrentUserBillingBalanceRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": result.Total, "limit": limit, "offset": offset})
 }
 
-// RechargeCurrentUserBillingBalance permits unrestricted self-credit without payment verification.
+// RechargeCurrentUserBillingBalance submits a request without crediting funds.
 func (h *Handler) RechargeCurrentUserBillingBalance(c *gin.Context) {
 	ctx, cancel := requestContext(c)
 	defer cancel()
@@ -58,15 +59,35 @@ func (h *Handler) RechargeCurrentUserBillingBalance(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_amount", fmt.Errorf("amount must be a positive finite number"))
 		return
 	}
-	record, errRecharge := h.repo.ApplyBillingBalanceRecord(ctx, cluster.BillingBalanceUpdate{
-		UserID: user.ID, Type: cluster.BillingBalanceTypeRecharge, Amount: *body.Amount,
-		Operator: fmt.Sprintf("user:%d", user.ID), Note: body.Note,
-	})
+	record, balance, errRecharge := h.repo.CreateBillingRechargeRequest(ctx, user.ID, *body.Amount, body.Note)
 	if errRecharge != nil {
+		if errors.Is(errRecharge, cluster.ErrTopupPending) {
+			respondError(c, http.StatusConflict, "topup_pending", errRecharge)
+			return
+		}
+		if errors.Is(errRecharge, cluster.ErrInvalidTopupAmount) {
+			respondError(c, http.StatusBadRequest, "invalid_amount", errRecharge)
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "billing_recharge_failed", errRecharge)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"record": currentUserBillingBalanceRecordResponse(record), "current_balance": record.BalanceAfter})
+	c.JSON(http.StatusAccepted, gin.H{"request": record, "current_balance": balance})
+}
+
+func (h *Handler) GetCurrentUserRechargeRequest(c *gin.Context) {
+	ctx, cancel := requestContext(c)
+	defer cancel()
+	user, ok := h.authenticatedUser(c, ctx, authFields{})
+	if !ok {
+		return
+	}
+	requests, errRequests := h.repo.PendingBillingRechargeRequests(ctx, []uint{user.ID})
+	if errRequests != nil {
+		respondError(c, http.StatusInternalServerError, "billing_recharge_request_load_failed", errRequests)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"request": requests[user.ID]})
 }
 
 func currentUserBillingBalanceRecordResponse(record *cluster.BillingBalanceRecord) gin.H {

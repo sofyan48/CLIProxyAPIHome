@@ -1031,11 +1031,30 @@ Response: `200 { "items": BalanceRecord[], "total": integer, "limit": integer, "
 
 ### POST `/billing/recharge`
 
-**Unrestricted self-credit:** directly credits the session user's balance without payment, voucher, or administrator approval. This is not a payment integration. Every successful request applies another recharge; there is no idempotency key.
+Submits a self-topup request for **administrator approval**. Submission does not change the balance or create a ledger record. This is not a payment integration. Only one pending request is allowed per user; a second submission returns `409 topup_pending`.
 
-Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. Optional `note` is a string, trimmed and stored in the ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
+Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. A finite amount that would overflow the balance or is too small to increase its float64 representation returns `400 invalid_amount`. Optional `note` is trimmed and stored in the request, then copied into the approved ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
 
-Response: `200 { "record": BalanceRecord, "current_balance": number }`. Balance mutation and ledger creation use one database transaction via `ApplyBillingBalanceRecord`. Existing `credits_unlimited` behavior is preserved: the ledger records the recharge but the numeric balance is unchanged. Authentication failures return `401`. Database failures (including a resulting balance overflow) return `500 billing_recharge_failed` without a partial ledger/balance mutation.
+Response: HTTP **202**, with the unchanged balance:
+
+```json
+{
+  "request": {
+    "id": 123, "user_id": 1, "amount": 12.5, "note": "optional audit note",
+    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
+    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
+  },
+  "current_balance": 10
+}
+```
+
+Request IDs are numeric; ledger IDs are strings. Approval is performed through `POST /v8/management/users/:id/topup/approve` with the exact `request_id`. Approval credits the immutable database amount exactly once and stores the ledger reference and approval timestamp in the same transaction. Existing `credits_unlimited` behavior is preserved: approval creates a ledger record without changing the numeric balance. Authentication failures return `401`; accounts awaiting account approval return `403 approval_pending`. Database failures return `500 billing_recharge_failed` without a partial mutation.
+
+### GET `/billing/recharge-request`
+
+Authenticated user only. Returns `200 { "request": RechargeRequest | null }`, using the request fields above. It returns only the session user's pending request and ignores supplied user IDs. After approval it returns `null` unless a new pending request exists. Authentication failures return `401` (or `403 approval_pending` for an unapproved account); database errors return `500 billing_recharge_request_load_failed`.
+
+Both `GET /user/capabilities` and `GET /v8/management/capabilities` advertise `capabilities.topup_approval: true`. Clients should gate the approval flow on this flag; missing/false means an older deployment does not advertise this contract. Requests are persistent in `billing_recharge_request`; schema/snapshot version 9 includes pending and approved requests. Older snapshot formats remain importable and restore without recharge requests.
 
 ### GET `/billing/charges`
 

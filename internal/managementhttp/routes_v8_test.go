@@ -98,6 +98,36 @@ func TestManagementV8ApprovalRequiresAdministrator(t *testing.T) {
 			t.Fatal("unauthorized approval or failed authorized approval")
 		}
 	}
+	topup, balance, errTopup := repo.CreateBillingRechargeRequest(ctx, user.ID, 5, "authorization")
+	if errTopup != nil {
+		t.Fatal(errTopup)
+	}
+	for _, token := range []string{"", session.Token, "admin-test-secret", "admin-test-secret"} {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v8/management/users/%d/topup/approve", user.ID), strings.NewReader(fmt.Sprintf(`{"request_id":%d}`, topup.ID)))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		want, wantBalance := http.StatusUnauthorized, balance
+		if token == "admin-test-secret" {
+			want = http.StatusOK
+			wantBalance += 5
+		}
+		if response.Code != want {
+			t.Fatalf("topup authorization=%d %s", response.Code, response.Body.String())
+		}
+		stored, errStored := repo.GetUser(ctx, user.ID)
+		if errStored != nil || stored.Credits != wantBalance {
+			t.Fatalf("user=%+v error=%v", stored, errStored)
+		}
+	}
+	ledger, errLedger := repo.ListBillingBalanceRecords(ctx, cluster.BillingBalanceQuery{UserID: &user.ID})
+	if errLedger != nil || ledger.Total != 1 {
+		t.Fatalf("ledger=%+v error=%v", ledger, errLedger)
+	}
 }
 
 func TestManagementV8Routes(t *testing.T) {
@@ -118,7 +148,7 @@ func TestManagementV8Routes(t *testing.T) {
 		"GET /server/latest-version", "POST /requests/api-call", "POST /routing/cooldown/reset",
 		"GET /observability/logs", "GET /observability/usage/api-keys", "GET /plugins/store", "DELETE /plugins/:id",
 		"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset", "GET /plugins/:id/quota",
-		"GET /users", "POST /users/:id/approve", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
+		"GET /users", "POST /users/:id/approve", "POST /users/:id/topup/approve", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
 	} {
 		method, path, _ := strings.Cut(route, " ")
 		if !registered[method+" /v8/management"+path] {

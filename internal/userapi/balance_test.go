@@ -29,7 +29,11 @@ func TestUserBillingRechargeAndBalanceRecordsSessionScope(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(resp, req)
-		if resp.Code != http.StatusOK {
+		want := http.StatusOK
+		if method == http.MethodPost {
+			want = http.StatusAccepted
+		}
+		if resp.Code != want {
 			t.Fatalf("%s %s: status=%d body=%s", method, path, resp.Code, resp.Body.String())
 		}
 		return resp
@@ -37,28 +41,48 @@ func TestUserBillingRechargeAndBalanceRecordsSessionScope(t *testing.T) {
 	resp := request(http.MethodPost, fmt.Sprintf("/user/billing/recharge?user_id=%d", second.ID),
 		fmt.Sprintf(`{"amount":12.5,"note":" self recharge ","user_id":%d,"operator":"admin","type":"deduct"}`, second.ID))
 	var recharge struct {
-		Record struct {
-			ID            string  `json:"id"`
-			Type          string  `json:"type"`
-			Amount        float64 `json:"amount"`
-			BalanceBefore float64 `json:"balance_before"`
-			BalanceAfter  float64 `json:"balance_after"`
-		} `json:"record"`
-		CurrentBalance float64 `json:"current_balance"`
+		Request        cluster.BillingRechargeRequestRecord `json:"request"`
+		CurrentBalance float64                              `json:"current_balance"`
 	}
 	if errDecode := json.Unmarshal(resp.Body.Bytes(), &recharge); errDecode != nil {
 		t.Fatal(errDecode)
 	}
-	if recharge.Record.ID == "" || recharge.Record.Type != "recharge" || recharge.Record.Amount != 12.5 || recharge.Record.BalanceBefore != 99 || recharge.Record.BalanceAfter != 111.5 || recharge.CurrentBalance != 111.5 {
+	if recharge.Request.ID == 0 || recharge.Request.UserID != first.ID || recharge.Request.Status != "pending" || recharge.Request.Note != "self recharge" || recharge.Request.Amount != 12.5 || recharge.CurrentBalance != 99 {
 		t.Fatalf("unexpected recharge: %+v", recharge)
 	}
 	ctx := context.Background()
 	ledger, errLedger := handler.repo.ListBillingBalanceRecords(ctx, cluster.BillingBalanceQuery{UserID: &first.ID})
-	if errLedger != nil || ledger.Total != 1 {
+	if errLedger != nil || ledger.Total != 0 {
 		t.Fatalf("ledger=%+v error=%v", ledger, errLedger)
 	}
-	if ledger.Records[0].Operator != fmt.Sprintf("user:%d", first.ID) || ledger.Records[0].Note != "self recharge" {
-		t.Fatalf("unexpected ledger audit fields: %+v", ledger.Records[0])
+	var pending struct {
+		Request *cluster.BillingRechargeRequestRecord `json:"request"`
+	}
+	if errDecode := json.Unmarshal(request(http.MethodGet, fmt.Sprintf("/user/billing/recharge-request?user_id=%d", second.ID), "").Body.Bytes(), &pending); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if pending.Request == nil || pending.Request.ID != recharge.Request.ID {
+		t.Fatalf("pending=%+v", pending)
+	}
+	conflict := httptest.NewRecorder()
+	conflictReq := httptest.NewRequest(http.MethodPost, "/user/billing/recharge", strings.NewReader(`{"amount":1}`))
+	conflictReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(conflict, conflictReq)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "topup_pending") {
+		t.Fatalf("conflict=%d %s", conflict.Code, conflict.Body.String())
+	}
+	if _, approved, errApprove := handler.repo.ApproveBillingRechargeRequest(ctx, first.ID, recharge.Request.ID); errApprove != nil || approved.BalanceBefore != 99 || approved.BalanceAfter != 111.5 {
+		t.Fatalf("approval=%+v error=%v", approved, errApprove)
+	}
+	ledger, errLedger = handler.repo.ListBillingBalanceRecords(ctx, cluster.BillingBalanceQuery{UserID: &first.ID})
+	if errLedger != nil || ledger.Total != 1 || ledger.Records[0].Operator != "admin" || ledger.Records[0].Note != "self recharge" {
+		t.Fatalf("ledger=%+v error=%v", ledger, errLedger)
+	}
+	if errDecode := json.Unmarshal(request(http.MethodGet, "/user/billing/recharge-request", "").Body.Bytes(), &pending); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if pending.Request != nil {
+		t.Fatal("approved request still pending")
 	}
 	other, errOther := handler.repo.GetUser(ctx, second.ID)
 	if errOther != nil || other.Credits != 99 {
@@ -67,7 +91,13 @@ func TestUserBillingRechargeAndBalanceRecordsSessionScope(t *testing.T) {
 	if _, errSeed := handler.repo.ApplyBillingBalanceRecord(ctx, cluster.BillingBalanceUpdate{UserID: second.ID, Type: cluster.BillingBalanceTypeRecharge, Amount: 90, Note: "private admin note"}); errSeed != nil {
 		t.Fatal(errSeed)
 	}
-	request(http.MethodPost, "/user/billing/recharge", `{"amount":0.25}`)
+	next := request(http.MethodPost, "/user/billing/recharge", `{"amount":0.25}`)
+	if errDecode := json.Unmarshal(next.Body.Bytes(), &recharge); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if _, _, errApprove := handler.repo.ApproveBillingRechargeRequest(ctx, first.ID, recharge.Request.ID); errApprove != nil {
+		t.Fatal(errApprove)
+	}
 
 	for _, offset := range []int{0, 1, 2} {
 		respList := request(http.MethodGet, fmt.Sprintf("/user/billing/balance-records?user_id=%d&limit=1&offset=%d", second.ID, offset), "")
@@ -161,6 +191,7 @@ func TestUserBillingBalanceRoutesAuthenticationAndValidation(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/user/billing/balance-records"},
 		{http.MethodPost, "/user/billing/recharge"},
+		{http.MethodGet, "/user/billing/recharge-request"},
 	} {
 		for _, auth := range []string{"", "Bearer invalid"} {
 			resp := httptest.NewRecorder()

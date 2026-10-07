@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -112,9 +113,20 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "user_load_failed", errRecords)
 		return
 	}
+	ids := make([]uint, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	pending, errPending := h.repo.PendingBillingRechargeRequests(ctx, ids)
+	if errPending != nil {
+		respondError(c, http.StatusInternalServerError, "billing_recharge_request_load_failed", errPending)
+		return
+	}
 	items := make([]gin.H, 0, len(records))
 	for _, record := range records {
-		items = append(items, userRecordToMap(&record))
+		item := userRecordToMap(&record)
+		item["pending_topup"] = pendingTopupResponse(pending[record.ID])
+		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"users": items})
 }
@@ -133,7 +145,14 @@ func (h *Handler) GetUser(c *gin.Context) {
 		respondUserRecordError(c, "user_load_failed", errRecord)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": userRecordToMap(record)})
+	pending, errPending := h.repo.PendingBillingRechargeRequests(ctx, []uint{id})
+	if errPending != nil {
+		respondError(c, http.StatusInternalServerError, "billing_recharge_request_load_failed", errPending)
+		return
+	}
+	item := userRecordToMap(record)
+	item["pending_topup"] = pendingTopupResponse(pending[id])
+	c.JSON(http.StatusOK, gin.H{"user": item})
 }
 
 // CreateUser creates a user.
@@ -192,6 +211,54 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"user": userRecordToMap(record)})
+}
+
+func pendingTopupResponse(request *cluster.BillingRechargeRequestRecord) any {
+	if request == nil {
+		return nil
+	}
+	return gin.H{"id": request.ID, "user_id": request.UserID, "amount": request.Amount, "note": request.Note, "status": request.Status, "created_at": request.CreatedAt}
+}
+
+func (h *Handler) ApproveUserTopup(c *gin.Context) {
+	id, ok := userIDFromParam(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		RequestID uint `json:"request_id"`
+	}
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		respondError(c, http.StatusBadRequest, "invalid_request_id", errBind)
+		return
+	}
+	if body.RequestID == 0 || uint64(body.RequestID) > math.MaxInt64 {
+		respondError(c, http.StatusBadRequest, "invalid_request_id", fmt.Errorf("request_id is required and must be a positive integer"))
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	user, record, errApprove := h.repo.ApproveBillingRechargeRequest(ctx, id, body.RequestID)
+	if errApprove != nil {
+		if errors.Is(errApprove, gorm.ErrRecordNotFound) {
+			respondError(c, http.StatusNotFound, "topup_request_not_found", errApprove)
+			return
+		}
+		if errors.Is(errApprove, cluster.ErrInvalidTopupAmount) {
+			respondError(c, http.StatusBadRequest, "invalid_amount", errApprove)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "topup_approve_failed", errApprove)
+		return
+	}
+	item := userRecordToMap(user)
+	pending, errPending := h.repo.PendingBillingRechargeRequests(ctx, []uint{id})
+	if errPending != nil {
+		respondError(c, http.StatusInternalServerError, "billing_recharge_request_load_failed", errPending)
+		return
+	}
+	item["pending_topup"] = pendingTopupResponse(pending[id])
+	c.JSON(http.StatusOK, gin.H{"user": item, "record": billingBalanceRecordResponse(record), "current_balance": user.Credits})
 }
 
 // ApproveUser allows a publicly registered user to sign in.
@@ -529,10 +596,11 @@ func userRecordToMap(record *cluster.UserRecord) gin.H {
 		weekResetDay = cluster.DefaultWeekResetDay
 	}
 	return gin.H{
-		"id":                      record.ID,
-		"username":                record.Username,
-		"password_set":            record.Password != "",
-		"approval_pending":        record.ApprovalPending,
+		"id":               record.ID,
+		"username":         record.Username,
+		"password_set":     record.Password != "",
+		"approval_pending": record.ApprovalPending,
+
 		"credits":                 record.Credits,
 		"credits_unlimited":       record.CreditsUnlimited,
 		"timezone":                timezone,

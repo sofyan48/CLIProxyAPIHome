@@ -26,6 +26,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"capabilities": gin.H{
+			"topup_approval":     true,
 			"email_registration": enabled,
 			"email_verification": enabled,
 			"password_recovery":  enabled,
