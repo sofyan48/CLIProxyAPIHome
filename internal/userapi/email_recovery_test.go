@@ -143,22 +143,25 @@ func TestEmailVerificationResendCooldown(t *testing.T) {
 }
 
 func TestRegistrationVerificationUsesSharedRateLimits(t *testing.T) {
-	_, router, db := newUserEmailTestHandler(t, nil)
+	handler, router, db := newUserEmailTestHandler(t, nil)
 	register := performUserJSONRequest(t, router, http.MethodPost, "/user/register", map[string]any{
 		"username": "alice",
 		"password": "password",
 		"email":    "alice@example.com",
 	}, "")
-	if register.Code != http.StatusOK {
+	if register.Code != http.StatusAccepted {
 		t.Fatalf("register status = %d body=%s", register.Code, register.Body.String())
 	}
-	var login struct {
-		Token string `json:"token"`
+	user, errUser := handler.repo.GetUserByUsername(context.Background(), "alice")
+	if errUser != nil {
+		t.Fatal(errUser)
 	}
-	if errDecode := json.Unmarshal(register.Body.Bytes(), &login); errDecode != nil || login.Token == "" {
-		t.Fatalf("decode registration token: token=%q error=%v", login.Token, errDecode)
+	pending := false
+	if _, errApprove := handler.repo.UpdateUser(context.Background(), user.ID, cluster.UserUpdate{ApprovalPending: &pending}); errApprove != nil {
+		t.Fatal(errApprove)
 	}
-	resend := performUserJSONRequest(t, router, http.MethodPost, "/user/email/verification", map[string]any{}, login.Token)
+	bearer := createUserTestBearerToken(t, handler, user.ID, user.SessionVersion)
+	resend := performUserJSONRequest(t, router, http.MethodPost, "/user/email/verification", map[string]any{}, bearer)
 	if resend.Code != http.StatusTooManyRequests {
 		t.Fatalf("immediate resend status = %d body=%s", resend.Code, resend.Body.String())
 	}
@@ -181,7 +184,7 @@ func TestRegistrationWithoutEmailIsRateLimited(t *testing.T) {
 			"username": "alice",
 			"password": "password",
 		}, "")
-		if attempt == 0 && response.Code != http.StatusOK {
+		if attempt == 0 && response.Code != http.StatusAccepted {
 			t.Fatalf("initial registration status = %d body=%s", response.Code, response.Body.String())
 		}
 		if attempt > 0 && response.Code != http.StatusConflict {
@@ -218,7 +221,7 @@ func TestRegistrationDoesNotRevealOrMailVerifiedEmailOwner(t *testing.T) {
 		"password": "password",
 		"email":    email,
 	}, "")
-	if register.Code != http.StatusOK {
+	if register.Code != http.StatusAccepted {
 		t.Fatalf("claimant registration status = %d body=%s", register.Code, register.Body.String())
 	}
 	var verificationJobs int64

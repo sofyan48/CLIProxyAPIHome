@@ -59,7 +59,7 @@ Public routes:
 | --- | --- | --- |
 | `GET` | `/capabilities` | Reports optional User API capabilities. |
 | `GET` | `/models` | Returns the public model catalog. |
-| `POST` | `/register` | Creates a user and returns a bearer token. |
+| `POST` | `/register` | Creates a pending user; returns HTTP 202 without a bearer token. |
 | `POST` | `/login` | Password login for users without passkey and without TOTP. |
 | `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
 | `POST` | `/login/passkey` | Passkey login. |
@@ -67,7 +67,9 @@ Public routes:
 | `POST` | `/password/forgot` | Accepts a generic password-recovery request. |
 | `POST` | `/password/reset` | Consumes a reset token and sets a new password. |
 
-All other `/user/*` routes require a bearer token returned by a successful register or login response.
+Passkey login begin/options are also public. Protected `/user/*` routes require a bearer token returned by a successful login response.
+
+Publicly registered users must be approved by an administrator through `POST /v8/management/users/:id/approve`. Until then, password/TOTP login, passkey login begin/finish, and bearer-session authentication (including `/me`) return HTTP 403 with `{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`. Email verification and password reset neither clear approval status nor issue a session. Existing users and administrator-created users remain active.
 The bearer token is an RS256 JWT signed with the cluster root CA private key and verified with the cluster root CA public key. Replacing the cluster root CA invalidates previously issued User API tokens.
 Bearer tokens also carry the user's current session version. A successful password change, password reset, or Management API password update increments that version and invalidates older bearer tokens. Authenticated password changes return a replacement bearer session for the current client; password reset does not log the user in.
 Password values are hashed and verified exactly as provided; leading and trailing whitespace is not trimmed. New bcrypt passwords are limited to 72 UTF-8 bytes.
@@ -104,7 +106,7 @@ Most successful delete or simple write operations return:
 { "status": "ok" }
 ```
 
-Successful login and register responses return:
+Successful login responses return:
 
 ```json
 {
@@ -261,7 +263,15 @@ Fields:
 | `password` | string | yes | Plaintext password used to create the stored password hash. |
 | `email` | string | no | Optional email. Accepted only when `email_registration` is true. It is normalized and starts unverified; it does not reserve ownership until verification succeeds. |
 
-Response: login response shape. When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
+Response: HTTP **202 Accepted**, with no bearer token or session:
+
+```json
+{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
+```
+
+The account is persisted with `approval_pending: true`; this flag cannot be overridden by registration input. The client should show the message rather than enter the authenticated workspace. After administrator approval, the user can log in normally.
+
+When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
 
 All registration attempts are limited per source IP and globally, including username-only registration. Verification delivery has its own target-email limits. A limited response is `429 registration_rate_limited` with `Retry-After`.
 

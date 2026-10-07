@@ -58,6 +58,57 @@ type userPeriodLimitResetHTTPResponse struct {
 	Limits cluster.UserPeriodLimitsStatus `json:"limits"`
 }
 
+func TestUserManagementApproval(t *testing.T) {
+	handler, engine, closeRepo := newUserManagementHTTPTestServer(t)
+	defer closeRepo()
+	ctx := context.Background()
+	username := "pending"
+	pending := true
+	user, errCreate := handler.repo.CreateUser(ctx, cluster.UserUpdate{Username: &username, ApprovalPending: &pending})
+	if errCreate != nil {
+		t.Fatal(errCreate)
+	}
+	for _, path := range []string{"/users", fmt.Sprintf("/users/%d", user.ID)} {
+		response := performUserManagementRequest(t, engine, http.MethodGet, path, "")
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"approval_pending":true`) {
+			t.Fatalf("pending map = %d %s", response.Code, response.Body.String())
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		response := performUserManagementRequest(t, engine, http.MethodPost, fmt.Sprintf("/users/%d/approve", user.ID), "")
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"approval_pending":false`) {
+			t.Fatalf("approve = %d %s", response.Code, response.Body.String())
+		}
+	}
+	stored, errLoad := handler.repo.GetUser(ctx, user.ID)
+	if errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	if stored.ApprovalPending {
+		t.Fatal("approval was not persisted")
+	}
+	created := performUserManagementRequest(t, engine, http.MethodPost, "/users", `{"username":"admin-created","password":"password"}`)
+	if created.Code != http.StatusOK || !strings.Contains(created.Body.String(), `"approval_pending":false`) {
+		t.Fatalf("admin create = %d %s", created.Code, created.Body.String())
+	}
+	for _, tc := range []struct {
+		id     string
+		status int
+	}{{"invalid", http.StatusBadRequest}, {"0", http.StatusBadRequest}, {"99999", http.StatusNotFound}} {
+		response := performUserManagementRequest(t, engine, http.MethodPost, "/users/"+tc.id+"/approve", "")
+		if response.Code != tc.status {
+			t.Fatalf("approve %s = %d %s", tc.id, response.Code, response.Body.String())
+		}
+	}
+	if errDelete := handler.repo.DeleteUser(ctx, user.ID); errDelete != nil {
+		t.Fatal(errDelete)
+	}
+	deleted := performUserManagementRequest(t, engine, http.MethodPost, fmt.Sprintf("/users/%d/approve", user.ID), "")
+	if deleted.Code != http.StatusNotFound {
+		t.Fatalf("deleted approval = %d", deleted.Code)
+	}
+}
+
 func TestUserManagementHTTPCreateAndPatchPeriodLimits(t *testing.T) {
 	handler, engine, closeRepo := newUserManagementHTTPTestServer(t)
 	defer closeRepo()
@@ -414,6 +465,7 @@ func newUserManagementHTTPTestServer(t *testing.T) (*Handler, *gin.Engine, func(
 	engine := gin.New()
 	engine.GET("/users", handler.ListUsers)
 	engine.POST("/users", handler.CreateUser)
+	engine.POST("/users/:id/approve", handler.ApproveUser)
 	engine.GET("/users/:id", handler.GetUser)
 	engine.PATCH("/users/:id", handler.UpdateUser)
 	engine.GET("/users/:id/period-limits", handler.GetUserPeriodLimits)

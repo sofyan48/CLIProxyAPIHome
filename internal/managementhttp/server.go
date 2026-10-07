@@ -260,6 +260,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPost, "/proxy/proxy-pools/:id/test", handler.TestProxyPoolItem)
 	r.Set(http.MethodGet, "/users", handler.ListUsers)
 	r.Set(http.MethodPost, "/users", handler.CreateUser)
+	r.Set(http.MethodPost, "/users/:id/approve", handler.ApproveUser)
 	r.Set(http.MethodGet, "/users/:id", handler.GetUser)
 	r.Set(http.MethodPut, "/users/:id", handler.UpdateUser)
 	r.Set(http.MethodPatch, "/users/:id", handler.UpdateUser)

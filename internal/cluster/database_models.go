@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 7
+const currentDatabaseVersion = 8
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -225,6 +225,45 @@ func (databaseSnapshotV5UsageRecord) TableName() string {
 	return "usage"
 }
 
+// databaseSnapshotV7UserRecord preserves the user shape before registration approval.
+type databaseSnapshotV7UserRecord struct {
+	ID                   uint           `gorm:"column:id;primaryKey;autoIncrement"`
+	Username             string         `gorm:"column:username"`
+	Password             string         `gorm:"column:password"`
+	Email                *string        `gorm:"column:email"`
+	EmailVerifiedAt      *time.Time     `gorm:"column:email_verified_at"`
+	EmailVersion         uint64         `gorm:"column:email_version"`
+	SessionVersion       uint64         `gorm:"column:session_version"`
+	Credits              float64        `gorm:"column:credits"`
+	CreditsUnlimited     bool           `gorm:"column:credits_unlimited"`
+	Timezone             string         `gorm:"column:timezone"`
+	Limit5hCredits       *float64       `gorm:"column:limit_5h_credits"`
+	WindowMode5h         string         `gorm:"column:window_mode_5h"`
+	Limit1dCredits       *float64       `gorm:"column:limit_1d_credits"`
+	WindowMode1d         string         `gorm:"column:window_mode_1d"`
+	Limit7dCredits       *float64       `gorm:"column:limit_7d_credits"`
+	WindowMode7d         string         `gorm:"column:window_mode_7d"`
+	WeekResetDay         int            `gorm:"column:week_reset_day"`
+	WeekResetHour        int            `gorm:"column:week_reset_hour"`
+	Limit30dCredits      *float64       `gorm:"column:limit_30d_credits"`
+	WindowMode30d        string         `gorm:"column:window_mode_30d"`
+	PeriodWindowStart5h  *time.Time     `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d  *time.Time     `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d  *time.Time     `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d *time.Time     `gorm:"column:period_window_start_30d"`
+	UsageEpoch5h         *time.Time     `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d         *time.Time     `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d         *time.Time     `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d        *time.Time     `gorm:"column:usage_epoch_30d"`
+	MFA                  JSONB          `gorm:"column:mfa"`
+	Passkey              JSONB          `gorm:"column:passkey"`
+	CreatedAt            time.Time      `gorm:"column:created_at"`
+	UpdatedAt            time.Time      `gorm:"column:updated_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at"`
+}
+
+func (databaseSnapshotV7UserRecord) TableName() string { return "user" }
+
 var databaseSnapshotV1Models = []databaseModel{
 	newDatabaseModel[databaseSnapshotV4AuthRecord]("auth", []string{"uuid"}, false, true),
 	newDatabaseModel[ConfigRecord]("config", []string{"key"}, false, true),
@@ -233,7 +272,7 @@ var databaseSnapshotV1Models = []databaseModel{
 	newDatabaseModel[PluginTaskRecord]("plugin_tasks", []string{"id"}, true, false),
 	newDatabaseModel[PluginStoreAuthKeyRecord]("plugin_store_auth_key", []string{"id"}, false, true),
 	newDatabaseModel[PluginStoreAuthRecord]("plugin_store_auth", []string{"id"}, true, true),
-	newDatabaseModel[UserRecord]("user", []string{"id"}, true, true),
+	newDatabaseModel[databaseSnapshotV7UserRecord]("user", []string{"id"}, true, true),
 	newDatabaseModel[UserSecurityTokenRecord]("user_security_token", []string{"id"}, true, false),
 	newDatabaseModel[UserMailJobRecord]("user_mail_job", []string{"id"}, true, false),
 	newDatabaseModel[UserSecurityThrottleRecord]("user_security_throttle", []string{"key"}, false, false),
@@ -276,10 +315,23 @@ var databaseSnapshotV5Models = databaseSnapshotV5ModelRegistry()
 // databaseSnapshotV6Models is the frozen database snapshot format v6 registry.
 var databaseSnapshotV6Models = currentDatabaseModels()
 
-// homeDatabaseModels is the current database snapshot registry.
-var homeDatabaseModels = append(append([]databaseModel(nil), databaseSnapshotV6Models...),
+// databaseSnapshotV7Models is the frozen database snapshot format v7 registry.
+var databaseSnapshotV7Models = append(append([]databaseModel(nil), databaseSnapshotV6Models...),
 	newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
 )
+
+// homeDatabaseModels is the current database snapshot registry.
+var homeDatabaseModels = databaseSnapshotV8ModelRegistry()
+
+func databaseSnapshotV8ModelRegistry() []databaseModel {
+	models := append([]databaseModel(nil), databaseSnapshotV7Models...)
+	for index := range models {
+		if models[index].name == "user" {
+			models[index] = newDatabaseModel[UserRecord]("user", []string{"id"}, true, true)
+		}
+	}
+	return models
+}
 
 var databaseMigrationOnlyModels = []databaseModel{
 	newDatabaseModel[schemaMigrationRecord]("home_schema_migration", []string{"id"}, false, false),
@@ -365,6 +417,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV5Models, true
 	case 6:
 		return databaseSnapshotV6Models, true
+	case 7:
+		return databaseSnapshotV7Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

@@ -1,6 +1,9 @@
 package managementhttp
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,8 +14,91 @@ import (
 	"github.com/gin-gonic/gin"
 	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
 	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/userapi"
+	"golang.org/x/crypto/bcrypt"
 )
+
+func TestManagementV8ApprovalRequiresAdministrator(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	ctx := context.Background()
+	db, errOpen := cluster.OpenSQLite(ctx, filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatal(errOpen)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatal(errDB)
+	}
+	t.Cleanup(func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Error(errClose)
+		}
+	})
+	if errMigrate := cluster.AutoMigrate(db); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	repo := cluster.NewRepository(db)
+	username, password := "ordinary-user", "password"
+	if _, errCreate := repo.CreateUser(ctx, cluster.UserUpdate{Username: &username, Password: &password}); errCreate != nil {
+		t.Fatal(errCreate)
+	}
+	pendingName, pending := "pending-user", true
+	user, errCreate := repo.CreateUser(ctx, cluster.UserUpdate{Username: &pendingName, ApprovalPending: &pending})
+	if errCreate != nil {
+		t.Fatal(errCreate)
+	}
+	cfg := &cpaconfig.Config{}
+	hashedSecret, errHash := bcrypt.GenerateFromPassword([]byte("admin-test-secret"), bcrypt.MinCost)
+	if errHash != nil {
+		t.Fatal(errHash)
+	}
+	cfg.RemoteManagement.SecretKey = string(hashedSecret)
+	sdk := cpasdkapi.NewHandlerWithoutConfigFilePath(cfg, nil)
+	home := clustermanagement.NewHandler(repo, nil, "", 0)
+	legacy := defaultRoutes(sdk)
+	registerClusterManagementRoutes(legacy, home)
+	engine := gin.New()
+	userapi.Register(engine.Group("/user"), userapi.NewHandler(repo, nil))
+	managementV8Routes(legacy, sdk, home).Register(engine.Group("/v8/management", sdk.Middleware()))
+	login := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/user/login", strings.NewReader(`{"username":"ordinary-user","password":"password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(login, request)
+	var session struct {
+		Token string `json:"token"`
+	}
+	if errDecode := json.Unmarshal(login.Body.Bytes(), &session); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if login.Code != http.StatusOK || session.Token == "" {
+		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	}
+	for _, token := range []string{"", session.Token, "admin-test-secret"} {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v8/management/users/%d/approve", user.ID), nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		want := http.StatusUnauthorized
+		if token == "admin-test-secret" {
+			want = http.StatusOK
+		}
+		if response.Code != want {
+			t.Fatalf("approval status = %d, want %d: %s", response.Code, want, response.Body.String())
+		}
+		stored, errLoad := repo.GetUser(ctx, user.ID)
+		if errLoad != nil {
+			t.Fatal(errLoad)
+		}
+		if stored.ApprovalPending != (token != "admin-test-secret") {
+			t.Fatal("unauthorized approval or failed authorized approval")
+		}
+	}
+}
 
 func TestManagementV8Routes(t *testing.T) {
 	sdk := cpasdkapi.NewHandlerWithoutConfigFilePath(&cpaconfig.Config{}, nil)
@@ -32,7 +118,7 @@ func TestManagementV8Routes(t *testing.T) {
 		"GET /server/latest-version", "POST /requests/api-call", "POST /routing/cooldown/reset",
 		"GET /observability/logs", "GET /observability/usage/api-keys", "GET /plugins/store", "DELETE /plugins/:id",
 		"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset", "GET /plugins/:id/quota",
-		"GET /users", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
+		"GET /users", "POST /users/:id/approve", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
 	} {
 		method, path, _ := strings.Cut(route, " ")
 		if !registered[method+" /v8/management"+path] {

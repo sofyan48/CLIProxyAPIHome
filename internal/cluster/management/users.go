@@ -194,6 +194,56 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": userRecordToMap(record)})
 }
 
+// ApproveUser allows a publicly registered user to sign in.
+func (h *Handler) ApproveUser(c *gin.Context) {
+	id, ok := userIDFromParam(c)
+	if !ok {
+		return
+	}
+	var body map[string]json.RawMessage
+	if errBind := c.ShouldBindBodyWithJSON(&body); errBind != nil && !errors.Is(errBind, io.EOF) {
+		respondError(c, http.StatusBadRequest, "invalid body", errBind)
+		return
+	}
+	var modelGroups *[]uint
+	if raw, provided := body["model_groups"]; provided {
+		var groups []uint
+		if errGroups := json.Unmarshal(raw, &groups); errGroups != nil {
+			respondError(c, http.StatusBadRequest, "invalid_model_groups", errGroups)
+			return
+		}
+		if len(groups) == 0 {
+			respondError(c, http.StatusBadRequest, "invalid_model_groups", cluster.ErrApprovalModelGroups)
+			return
+		}
+		for _, groupID := range groups {
+			if groupID == 0 {
+				respondError(c, http.StatusBadRequest, "invalid_model_groups", cluster.ErrApprovalModelGroups)
+				return
+			}
+		}
+		modelGroups = &groups
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	record, errApprove := h.repo.ApproveUser(ctx, id, modelGroups)
+	if errApprove != nil {
+		if errors.Is(errApprove, cluster.ErrApprovalModelGroups) {
+			respondError(c, http.StatusBadRequest, "invalid_model_groups", errApprove)
+			return
+		}
+		respondUserRecordError(c, "user_approve_failed", errApprove)
+		return
+	}
+	if modelGroups != nil {
+		if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+			respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"user": userRecordToMap(record)})
+}
+
 // DeleteUser deletes a user.
 func (h *Handler) DeleteUser(c *gin.Context) {
 	id, ok := userIDFromParam(c)
@@ -482,6 +532,7 @@ func userRecordToMap(record *cluster.UserRecord) gin.H {
 		"id":                      record.ID,
 		"username":                record.Username,
 		"password_set":            record.Password != "",
+		"approval_pending":        record.ApprovalPending,
 		"credits":                 record.Credits,
 		"credits_unlimited":       record.CreditsUnlimited,
 		"timezone":                timezone,

@@ -22,6 +22,78 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestUserApprovalMigrationAndSnapshotCompatibility(t *testing.T) {
+	ctx := context.Background()
+	legacy := openDatabaseSnapshotSQLiteRawTestDB(t, filepath.Join(t.TempDir(), "legacy.db"))
+	if errMigrate := legacy.AutoMigrate(&databaseSnapshotV7UserRecord{}); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	oldUser := databaseSnapshotV7UserRecord{Username: "legacy", Password: "hash", Timezone: "Asia/Shanghai", WindowMode5h: "first_use", WindowMode1d: "first_use", WindowMode7d: "first_use", WindowMode30d: "first_use", WeekResetDay: 1}
+	if errCreate := legacy.Create(&oldUser).Error; errCreate != nil {
+		t.Fatal(errCreate)
+	}
+	if errMigrate := AutoMigrate(legacy); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	var migrated UserRecord
+	if errLoad := legacy.First(&migrated, oldUser.ID).Error; errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	if migrated.ApprovalPending || migrated.Password != "hash" {
+		t.Fatalf("migration changed existing account: %+v", migrated)
+	}
+	if errUpdate := legacy.Model(&UserRecord{}).Where("id = ?", oldUser.ID).Update("approval_pending", true).Error; errUpdate != nil {
+		t.Fatal(errUpdate)
+	}
+	if errMigrate := AutoMigrate(legacy); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	if errLoad := legacy.First(&migrated, oldUser.ID).Error; errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	if !migrated.ApprovalPending {
+		t.Fatal("repeat migration cleared pending status")
+	}
+
+	for version := 1; version <= currentDatabaseVersion; version++ {
+		t.Run(fmt.Sprintf("snapshot-v%d", version), func(t *testing.T) {
+			models, ok := databaseSnapshotModels(version)
+			if !ok {
+				t.Fatal("unsupported snapshot version")
+			}
+			userType := databaseSnapshotModelType(t, models, "user").Elem()
+			_, hasApproval := userType.FieldByName("ApprovalPending")
+			if hasApproval != (version == currentDatabaseVersion) {
+				t.Fatal("legacy user snapshot shape changed")
+			}
+			path := filepath.Join(t.TempDir(), "snapshot.zip")
+			if _, errExport := exportDatabaseSnapshotVersion(ctx, legacy, path, version); errExport != nil {
+				t.Fatal(errExport)
+			}
+			snapshot, errOpen := OpenDatabaseSnapshot(ctx, path)
+			if errOpen != nil {
+				t.Fatal(errOpen)
+			}
+			t.Cleanup(func() {
+				if errClose := snapshot.Close(); errClose != nil {
+					t.Error(errClose)
+				}
+			})
+			target := openDatabaseSnapshotSQLiteRawTestDB(t, filepath.Join(t.TempDir(), "target.db"))
+			if _, errImport := ImportDatabaseSnapshot(ctx, target, snapshot, nil); errImport != nil {
+				t.Fatal(errImport)
+			}
+			var restored UserRecord
+			if errLoad := target.First(&restored, oldUser.ID).Error; errLoad != nil {
+				t.Fatal(errLoad)
+			}
+			if restored.ApprovalPending != (version == currentDatabaseVersion) || restored.Username != "legacy" || restored.Password != "hash" {
+				t.Fatalf("snapshot approval compatibility failed: %+v", restored)
+			}
+		})
+	}
+}
+
 func TestDatabaseSnapshotModelRegistryMatchesMigrationModels(t *testing.T) {
 	t.Parallel()
 

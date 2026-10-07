@@ -244,6 +244,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
+| `POST` | `/users/:id/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
@@ -983,6 +984,22 @@ Example response:
   ]
 }
 ```
+
+All management user response maps include the boolean `approval_pending`. Public registration sets it to `true`; existing users and users created by `POST /users` default to `false`. Generic user create/update input does not change this flag.
+
+### POST `/users/:id/approve`
+
+Approves a publicly registered account. Requires the same administrator Management API authentication as other `/users` routes; user bearer tokens do not authorize this operation. No request body is required. `id` must be a positive user ID.
+
+Optional body: `{"model_groups": [1, 2]}`. If provided, `model_groups` must be a nonempty array of positive integer IDs referencing existing, non-deleted, enabled model groups (`disabled: false`). Home assigns this scope to all existing active (non-deleted) API keys owned by the pending user, preserving key values, display names, channel bindings, and other fields. If the user has no active keys, Home creates one cryptographically random `sk-` key with this scope and empty channel bindings. Scope validation, key changes, the configuration event, and clearing `approval_pending` commit in one database transaction; failure leaves the user pending and keys unchanged. Omitting the body or `model_groups` preserves approval-only behavior: no keys are created or changed.
+
+Returns HTTP 200 with `{"user": ...}` in the same shape as `GET /users/:id`, with `approval_pending: false`. No API key value is returned; after login the user can retrieve keys from `GET /user/api-keys`. New user keys created with omitted `model_groups` inherit the union of model group IDs on that user's existing active keys; an explicit empty array retains the existing unrestricted-key behavior. Model scopes are stored on API keys, not the user record.
+
+Approval never changes passwords, MFA, passkeys, or session versions and does not issue a user session. Already-approved users return success without changing scopes, generating keys, or adding configuration events (well-formed supplied scopes are ignored). Malformed JSON returns HTTP 400 `invalid body`. Empty/null scopes, wrong types, non-positive IDs, and disabled groups return HTTP 400 `invalid_model_groups`; invalid user IDs return HTTP 400 `invalid id`. Missing or deleted users/model groups return HTTP 404 `not_found`. Database failures return HTTP 500 `user_approve_failed`. Management runtime refresh occurs after a scoped approval commits; a refresh failure returns HTTP 500 `reload_failed` but does not undo the committed approval. A retry cannot re-scope the approved user.
+
+Pending users receive HTTP 403 `approval_pending` from User API password/TOTP/passkey/session authentication. Email verification and password reset do not approve accounts. See the [User API](../user/api.md).
+
+The startup migration adds a non-null `approval_pending` column defaulting to `false` (database/snapshot version 8). Older snapshots remain supported and restore users as active.
 
 ### GET `/users/:id`
 

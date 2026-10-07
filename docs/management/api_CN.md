@@ -244,6 +244,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
+| `POST` | `/users/:id/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
@@ -982,6 +983,22 @@ User records 存储在 cluster repository 中。
   ]
 }
 ```
+
+所有管理接口用户响应均包含布尔字段 `approval_pending`。公开注册设置为 `true`；现有用户和通过 `POST /users` 创建的用户默认为 `false`。通用用户创建/更新请求不能修改此标志。
+
+### POST `/users/:id/approve`
+
+批准公开注册的账户。与其他 `/users` 管理路由一样，需要管理员 Management API 认证；用户 bearer token 无权调用。无需请求体，`id` 必须为正整数用户 ID。
+
+可选请求体：`{"model_groups": [1, 2]}`。提供时，`model_groups` 必须是非空正整数 ID 数组，引用存在、未删除且启用（`disabled: false`）的模型组。Home 将范围赋给待审批用户所有有效（未删除）API key，保留 key 值、显示名称、channel 绑定及其他字段。如果没有有效 key，则创建一个密码学随机的 `sk-` key，使用指定范围及空 channel 绑定。范围验证、key 修改、配置事件及清除 `approval_pending` 在同一数据库事务中提交；失败时用户保持待审批，key 不变。省略请求体或 `model_groups` 保留仅审批的旧行为，不创建或修改 key。
+
+返回 HTTP 200，结构为 `{"user": ...}`，与 `GET /users/:id` 相同，其中 `approval_pending: false`。响应不包含 API key 值；用户登录后可通过 `GET /user/api-keys` 获取。创建用户新 key 时省略 `model_groups`，会继承该用户所有有效 key 的模型组 ID 并集；显式空数组保留现有无限制 key 行为。模型范围保存在 API key 上，而非用户记录上。
+
+审批不会改变密码、MFA、passkey 或 session version，也不会签发 session。已审批用户重复请求成功，但不会修改范围、生成 key 或增加配置事件（格式正确的范围被忽略）。JSON 格式错误返回 HTTP 400 `invalid body`；空/null 范围、类型错误、非正整数 ID 或禁用模型组返回 HTTP 400 `invalid_model_groups`；无效用户 ID 返回 HTTP 400 `invalid id`。不存在或已删除的用户/模型组返回 HTTP 404 `not_found`。数据库失败返回 HTTP 500 `user_approve_failed`。带范围的审批提交后刷新管理运行时配置；刷新失败返回 HTTP 500 `reload_failed`，但不会撤销已提交审批，重试不会重新分配范围。
+
+待审批用户在 User API 密码/TOTP/passkey/session 认证时收到 HTTP 403 `approval_pending`。邮箱验证和密码重置不会批准账户。详见 [User API](../user/api_CN.md)。
+
+启动迁移添加非空 `approval_pending` 列，默认 `false`（数据库/快照版本 8）。旧快照仍受支持，恢复的旧用户保持可用。
 
 ### GET `/users/:id`
 

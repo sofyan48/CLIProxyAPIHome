@@ -59,7 +59,7 @@ user-email:
 | --- | --- | --- |
 | `GET` | `/capabilities` | 返回可选 User API capability。 |
 | `GET` | `/models` | 返回公开模型目录。 |
-| `POST` | `/register` | 创建用户并返回 bearer token。 |
+| `POST` | `/register` | 创建待审批用户；返回 HTTP 202，不签发 bearer token。 |
 | `POST` | `/login` | 用户未启用 passkey 和 TOTP 时的密码登录。 |
 | `POST` | `/login/totp` | 用户启用 TOTP 时的密码 + TOTP 登录。 |
 | `POST` | `/login/passkey` | Passkey 登录。 |
@@ -67,7 +67,9 @@ user-email:
 | `POST` | `/password/forgot` | 接收通用密码找回请求。 |
 | `POST` | `/password/reset` | 消费重置 token 并设置新密码。 |
 
-其他所有 `/user/*` route 都需要注册或登录成功后返回的 bearer token。
+Passkey 登录 begin/options 也属于公开接口。受保护的 `/user/*` route 需要登录成功后返回的 bearer token。
+
+公开注册的用户必须先由管理员调用 `POST /v8/management/users/:id/approve` 批准。在此之前，密码/TOTP 登录、passkey 登录 begin/finish 和 bearer session 认证（包括 `/me`）均返回 HTTP 403：`{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`。邮箱验证和密码重置不会清除待审批状态，也不会签发 session。现有用户和管理员创建的用户保持可用。
 Bearer token 是使用集群根 CA 私钥签名、并使用集群根 CA 公钥验证的 RS256 JWT。替换集群根 CA 后，之前签发的 User API token 会失效。
 Bearer token 还包含用户当前 session version。密码修改、密码重置或 Management API 管理员更新密码成功后都会递增该版本，使旧 bearer token 失效。已认证修改密码会为当前客户端返回替换 session；密码重置不会自动登录。
 密码会按照原始输入值进行 hash 和校验，不会去除首尾空白字符。新 bcrypt 密码最多为 72 个 UTF-8 字节。
@@ -104,7 +106,7 @@ Home User API 会额外写入以下响应头：
 { "status": "ok" }
 ```
 
-注册和登录成功时返回：
+登录成功时返回：
 
 ```json
 {
@@ -261,7 +263,15 @@ user-panel:
 | `password` | string | yes | 用于生成存储密码 hash 的明文密码。 |
 | `email` | string | no | 可选邮箱。仅在 `email_registration` 为 true 时接受；会先归一化并以未验证状态保存，验证成功前不会占用唯一所有权。 |
 
-响应：登录响应结构。提供邮箱时，Home 会先执行验证投递限流，再尝试异步排队；地址已被拥有或请求已受限时仍接受注册，但不会发送邮件。注册成功不代表邮箱已验证或已可用于找回。
+响应：HTTP **202 Accepted**，不包含 bearer token 或 session：
+
+```json
+{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
+```
+
+账户持久化为 `approval_pending: true`，注册请求不能覆盖此标志。客户端应显示提示，而不是进入已登录工作区。管理员批准后，用户可正常登录。
+
+提供邮箱时，Home 会先执行验证投递限流，再尝试异步排队；地址已被拥有或请求已受限时仍接受注册，但不会发送邮件。注册成功不代表邮箱已验证或已可用于找回。
 
 所有注册尝试（包括不带邮箱的 username-only 注册）都会按来源 IP 和全局维度限流；验证邮件投递另有目标邮箱维度限制。被限制时返回 `429 registration_rate_limited` 与 `Retry-After`。
 

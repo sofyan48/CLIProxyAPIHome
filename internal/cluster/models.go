@@ -328,6 +328,7 @@ func (PluginTaskRecord) TableName() string {
 }
 
 type UserRecord struct {
+	ApprovalPending  bool       `gorm:"column:approval_pending;not null;default:false" json:"approval_pending"`
 	ID               uint       `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
 	Username         string     `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
 	Password         string     `gorm:"column:password;type:text"`
