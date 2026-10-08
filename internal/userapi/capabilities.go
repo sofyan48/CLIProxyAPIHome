@@ -34,6 +34,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			// instead of discovering the route is missing by calling it and
 			// handling a 404 as if it were an outage.
 			"model_catalog": true,
+			"request_logs":  true,
 		},
 		"server_info": serverInfo,
 	})

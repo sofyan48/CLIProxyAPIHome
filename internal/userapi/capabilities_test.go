@@ -14,6 +14,7 @@ type userCapabilitiesPayload struct {
 		EmailVerification bool `json:"email_verification"`
 		PasswordRecovery  bool `json:"password_recovery"`
 		ModelCatalog      bool `json:"model_catalog"`
+		RequestLogs       bool `json:"request_logs"`
 		TopupApproval     bool `json:"topup_approval"`
 	} `json:"capabilities"`
 	ServerInfo struct {
@@ -44,6 +45,9 @@ func TestUserCapabilitiesReflectUsableConfiguration(t *testing.T) {
 			// advertised on a Home that cannot send mail at all.
 			if !body.Capabilities.TopupApproval {
 				t.Error("topup_approval = false, want true")
+			}
+			if !body.Capabilities.RequestLogs {
+				t.Error("request_logs = false, want true")
 			}
 			if !body.Capabilities.ModelCatalog {
 				t.Errorf("model_catalog = false, want true")

@@ -217,7 +217,8 @@ Example response:
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
-    "model_catalog": true
+    "model_catalog": true,
+        "request_logs": true
   },
   "server_info": {
     "home_version": "v1.2.3",
@@ -959,6 +960,50 @@ Only windows with `enabled: true` are enforced. `used`, `limit`, and `remaining`
   ]
 }
 ```
+
+## User-Owned Request Log Summaries
+
+### GET `/request-logs`
+
+Full endpoint: `GET /user/request-logs`. Requires the current user's bearer session; missing, invalid, expired, revoked, or deleted-user sessions return `401`. Pending users return `403 approval_pending`. `GET /user/capabilities` advertises `request_logs: true`; older builds may omit this flag.
+
+Only these query parameters are supported:
+
+| Parameter | Meaning |
+| --- | --- |
+| `from` | Optional RFC3339 timestamp (fractional seconds and timezone offsets accepted), inclusive. |
+| `to` | Optional RFC3339 timestamp, exclusive. |
+| `request_id` | Optional exact request ID; no substring, suffix, wildcard, or broad search. |
+| `limit` | Positive integer; default 50, clamped to 200. |
+| `offset` | Non-negative integer; default 0. |
+
+Invalid dates (including explicit empty values, date-only strings, and Unix seconds), reversed time ranges, malformed/overflowing integers, non-positive limits, and negative offsets return `400`. Equal time boundaries produce an empty range. Unknown parameters are ignored: `user_id`, `user`, `api_key`, key IDs, `key`, `search`, and administrative filters cannot change ownership, matching, or counts.
+
+```json
+{
+  "items": [
+    {
+      "timestamp": "2026-06-10T01:02:03Z",
+      "event_type": "completion",
+      "status": "success",
+      "model": "gpt-4.1-mini",
+
+      "tokens": 1500,
+      "latency_ms": 123,
+      "request_id": "req-first"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Every item contains exactly these seven keys: Time (`timestamp`, UTC RFC3339), Event (`event_type`), Status (`status`), Model (`model`), Tokens (`tokens`, accounting total), Latency (`latency_ms`), and Request ID (`request_id`). Event categories are `completion`, `embedding`, `response`, `message`, `stream`, or `unknown`; arbitrary event metadata is not returned. Status is `success` or `failed`, never an error detail or HTTP status code. Items are ordered by timestamp descending, then internal usage ID descending; that ID is not exposed. `total` is the ownership- and filter-scoped count before pagination. Empty results use `items: []`.
+
+Ownership is established only by the historical `billing_charge.user_id` snapshot linked to the usage record, captured when usage is ingested and billing attribution is recorded. Both list and count require this snapshot to match the authenticated user ID. There is **no fallback to the API key's current owner**, no payload-supplied user attribution, and no backfill from current bindings. Reassigning or deleting keys does not transfer historical logs; deleting a user invalidates access and does not transfer their logs to another user. Records with missing/null/unknown attribution are excluded, including legacy, failed, or non-billable records without a snapshot. This endpoint is therefore a fail-closed summary of attributed usage, not a complete raw request-log archive.
+
+Provider, HTTP status codes, client/key identifiers, secrets, routing, billing data, raw payloads, error details, and download URLs are never returned. This endpoint grants no access to administrative list/detail/file-download APIs.
 
 ## Billing
 
