@@ -989,13 +989,26 @@ Authorization: Bearer user.jwt.token
   ],
   "total": 1,
   "limit": 50,
-  "offset": 0
+  "offset": 0,
+  "summary": {
+    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
+    "average_latency_ms": 123,
+    "status": {"success": 1, "failed": 0}
+  }
 }
 ```
 
+响应 envelope 包含 `items`、`total`、`limit`、`offset` 和新增的 `summary`。SQL 聚合覆盖**分页前的全部匹配记录**，与列表和 `total` 使用完全相同的归属、`from`、`to` 和精确 `request_id` 过滤范围。`summary` 包含：
+
+- `by_model`：每个匹配模型的 `{model: string, requests: number}`，按 `requests` 降序、`model` 升序排序，不截断。
+- `average_latency_ms`：仅对正数 `latency_ms` 求数值平均；`<= 0` 表示未测量，不参与平均。没有正数测量值时返回 `null`。
+- `status`：`{success: number, failed: number}`，依据与列表状态相同的已存储 failed 标志计数。两者之和等于 `total`；失败记录仅在具有可信历史归属时纳入。
+
+没有匹配记录时返回 `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`。分页 offset 超出最后一条匹配记录时，仍返回完整过滤范围的汇总和 `total`。
+
 每项严格包含七个字段：时间（`timestamp`，UTC RFC3339）、事件（`event_type`）、状态（`status`）、模型（`model`）、Token 数（`tokens`，accounting total）、延迟（`latency_ms`）和请求 ID（`request_id`）。事件类别为 `completion`、`embedding`、`response`、`message`、`stream` 或 `unknown`，不会返回任意事件元数据。状态仅为 `success` 或 `failed`，不包含错误详情或 HTTP 状态码。按时间降序、内部 usage ID 降序排序；内部 ID 不对外返回。`total` 为按归属和过滤条件限定后、分页前的计数。空结果使用 `items: []`。
 
-归属只依据关联 usage 的历史 `billing_charge.user_id` 快照，该快照在 usage 入库并记录计费归属时捕获。列表和计数均要求快照匹配当前认证用户 ID。**绝不回退到 API key 当前所有者**，不信任 payload 中的用户身份，也不按当前绑定补填历史归属。重新分配或删除 key 不会转移历史日志；删除用户会使其无法访问，日志不会转移给其他用户。缺失、null 或未知归属的记录全部排除，包括没有快照的旧记录、失败请求和非计费记录。因此本接口是 fail-closed 的已归属 usage 摘要，而非完整原始请求日志归档。
+归属只依据关联 usage 的历史 `billing_charge.user_id` 快照，该快照在 usage 入库并记录计费归属时捕获。列表、计数和所有 summary 聚合均要求快照匹配当前认证用户 ID。**绝不回退到 API key 当前所有者**，不信任 payload 中的用户身份，也不按当前绑定补填历史归属。重新分配或删除 key 不会转移历史日志；删除用户会使其无法访问，日志不会转移给其他用户。缺失、null 或未知归属的记录全部排除，包括没有快照的旧记录、失败请求和非计费记录。因此本接口是 fail-closed 的已归属 usage 摘要，而非完整原始请求日志归档。
 
 不会返回 provider、HTTP 状态码、客户端/key 标识、secret、路由、计费数据、原始 payload、错误详情或下载 URL。本接口不授予管理端列表、详情或文件下载权限。
 

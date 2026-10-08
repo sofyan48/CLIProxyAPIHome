@@ -17,10 +17,11 @@ import (
 )
 
 type userRequestLogsPayload struct {
-	Items  []map[string]any `json:"items"`
-	Total  int64            `json:"total"`
-	Limit  int              `json:"limit"`
-	Offset int              `json:"offset"`
+	Items   []map[string]any                 `json:"items"`
+	Total   int64                            `json:"total"`
+	Limit   int                              `json:"limit"`
+	Offset  int                              `json:"offset"`
+	Summary cluster.UserRequestLogAggregates `json:"summary"`
 }
 
 func requestUserLogs(t *testing.T, router http.Handler, token, query string, status int) userRequestLogsPayload {
@@ -43,8 +44,34 @@ func requestUserLogs(t *testing.T, router http.Handler, token, query string, sta
 		if errDecode := json.Unmarshal(resp.Body.Bytes(), &envelope); errDecode != nil {
 			t.Fatal(errDecode)
 		}
-		if len(envelope) != 4 || payload.Items == nil {
+		assertKeys := func(value map[string]any, want ...string) {
+			t.Helper()
+			keys := make([]string, 0, len(value))
+			for key := range value {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			sort.Strings(want)
+			if !reflect.DeepEqual(keys, want) {
+				t.Fatalf("unsafe response keys: %v want %v; body=%s", keys, want, resp.Body.String())
+			}
+		}
+		assertKeys(envelope, "items", "total", "limit", "offset", "summary")
+		summary, ok := envelope["summary"].(map[string]any)
+		if !ok || payload.Items == nil || payload.Summary.ByModel == nil {
 			t.Fatalf("invalid envelope: %s", resp.Body.String())
+		}
+		assertKeys(summary, "by_model", "average_latency_ms", "status")
+		assertKeys(summary["status"].(map[string]any), "success", "failed")
+		for _, model := range summary["by_model"].([]any) {
+			assertKeys(model.(map[string]any), "model", "requests")
+		}
+		var modelTotal int64
+		for _, model := range payload.Summary.ByModel {
+			modelTotal += model.Requests
+		}
+		if modelTotal != payload.Total || payload.Summary.Status.Success+payload.Summary.Status.Failed != payload.Total {
+			t.Fatalf("summary counts disagree: %#v", payload)
 		}
 		for _, item := range payload.Items {
 			keys := make([]string, 0, len(item))
@@ -106,6 +133,19 @@ func TestUserRequestLogsOwnershipAndSafeSummary(t *testing.T) {
 		if payload.Total != int64(len(want)) || !reflect.DeepEqual(got, append([]string{}, want...)) {
 			t.Fatalf("query=%s total=%d items=%v want=%v", query, payload.Total, got, want)
 		}
+		wantSummary := cluster.UserRequestLogAggregates{ByModel: []cluster.UserRequestLogModelCount{}, Status: cluster.UserRequestLogStatusCounts{Success: int64(len(want))}}
+		if len(want) > 0 {
+			wantSummary.ByModel = append(wantSummary.ByModel, cluster.UserRequestLogModelCount{Model: "gpt-4.1-mini", Requests: int64(len(want))})
+		}
+		for _, id := range want {
+			if id == "safe-summary" {
+				latency := 123.0
+				wantSummary.AverageLatencyMS = &latency
+			}
+		}
+		if !reflect.DeepEqual(payload.Summary, wantSummary) {
+			t.Fatalf("query=%s summary=%#v want=%#v", query, payload.Summary, wantSummary)
+		}
 	}
 	assertRequests(firstToken, "", "safe-summary", "req-first")
 	assertRequests(secondToken, "", "req-second")
@@ -129,12 +169,16 @@ func TestUserRequestLogsOwnershipAndSafeSummary(t *testing.T) {
 	if item["event_type"] != "unknown" || item["status"] != "success" || item["tokens"] != float64(12) || item["latency_ms"] != float64(123) {
 		t.Fatalf("summary = %#v", item)
 	}
+	fullSummary := requestUserLogs(t, router, firstToken, "", http.StatusOK).Summary
 	page := requestUserLogs(t, router, firstToken, "?limit=1&offset=1", http.StatusOK)
+	if !reflect.DeepEqual(page.Summary, fullSummary) {
+		t.Fatalf("pagination changed summary: %#v", page)
+	}
 	if page.Total != 2 || page.Limit != 1 || page.Offset != 1 || len(page.Items) != 1 || page.Items[0]["request_id"] != "req-first" {
 		t.Fatalf("page = %#v", page)
 	}
 	page = requestUserLogs(t, router, firstToken, "?limit=999&offset=999", http.StatusOK)
-	if page.Total != 2 || page.Limit != 200 || page.Offset != 999 || len(page.Items) != 0 {
+	if page.Total != 2 || page.Limit != 200 || page.Offset != 999 || len(page.Items) != 0 || !reflect.DeepEqual(page.Summary, fullSummary) {
 		t.Fatalf("clamped empty page = %#v", page)
 	}
 	if _, errReassign := h.repo.UpdateAPIKeyBindings(ctx, "first-client-key", &second.ID, nil, nil); errReassign != nil {
@@ -181,8 +225,13 @@ func TestUserRequestLogsAuthDatesAndPagination(t *testing.T) {
 		{"2026-06-10T09:02:03+08:00", "2026-06-10T09:02:04+08:00", 1},
 	} {
 		query := "?" + url.Values{"from": {test.from}, "to": {test.to}}.Encode()
-		if got := requestUserLogs(t, router, token, query, http.StatusOK); got.Total != test.total {
-			t.Fatalf("%s total=%d want=%d", query, got.Total, test.total)
+		got := requestUserLogs(t, router, token, query, http.StatusOK)
+		wantSummary := cluster.UserRequestLogAggregates{ByModel: []cluster.UserRequestLogModelCount{}, Status: cluster.UserRequestLogStatusCounts{Success: test.total}}
+		if test.total > 0 {
+			wantSummary.ByModel = append(wantSummary.ByModel, cluster.UserRequestLogModelCount{Model: "gpt-4.1-mini", Requests: test.total})
+		}
+		if got.Total != test.total || !reflect.DeepEqual(got.Summary, wantSummary) {
+			t.Fatalf("%s payload=%#v want total=%d summary=%#v", query, got, test.total, wantSummary)
 		}
 	}
 	pending := true

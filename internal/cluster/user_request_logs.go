@@ -27,11 +27,28 @@ type UserRequestLogSummary struct {
 	RequestID string
 }
 
+type UserRequestLogModelCount struct {
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
+}
+
+type UserRequestLogStatusCounts struct {
+	Success int64 `json:"success"`
+	Failed  int64 `json:"failed"`
+}
+
+type UserRequestLogAggregates struct {
+	ByModel          []UserRequestLogModelCount `json:"by_model"`
+	AverageLatencyMS *float64                   `json:"average_latency_ms"`
+	Status           UserRequestLogStatusCounts `json:"status"`
+}
+
 type UserRequestLogResult struct {
-	Items  []UserRequestLogSummary
-	Total  int64
-	Limit  int
-	Offset int
+	Items   []UserRequestLogSummary
+	Total   int64
+	Limit   int
+	Offset  int
+	Summary UserRequestLogAggregates
 }
 
 // ListUserRequestLogs requires the immutable billing ownership snapshot. The
@@ -47,7 +64,10 @@ func (r *Repository) ListUserRequestLogs(ctx context.Context, userID uint, query
 		return UserRequestLogResult{}, errDB
 	}
 	query.Limit, query.Offset = normalizeUsageObservabilityPagination(query.Limit, query.Offset, 50, 200)
-	result := UserRequestLogResult{Items: make([]UserRequestLogSummary, 0), Limit: query.Limit, Offset: query.Offset}
+	result := UserRequestLogResult{
+		Items: make([]UserRequestLogSummary, 0), Limit: query.Limit, Offset: query.Offset,
+		Summary: UserRequestLogAggregates{ByModel: make([]UserRequestLogModelCount, 0)},
+	}
 	scope := db.WithContext(contextOrBackground(ctx)).Table("usage").
 		Where(`EXISTS (SELECT 1 FROM "billing_charge" WHERE "billing_charge"."usage_id" = "usage"."id" AND "billing_charge"."user_id" = ?)`, userID)
 	if query.From != nil {
@@ -59,8 +79,27 @@ func (r *Repository) ListUserRequestLogs(ctx context.Context, userID uint, query
 	if query.RequestID != "" {
 		scope = scope.Where(`"usage"."request_id" = ?`, query.RequestID)
 	}
-	if errCount := scope.Session(&gorm.Session{}).Count(&result.Total).Error; errCount != nil {
-		return UserRequestLogResult{}, errCount
+	// Aggregate the same ownership/filter scope before adding any pagination.
+	var totals struct {
+		Total            int64
+		AverageLatencyMS *float64
+		Success          int64
+		Failed           int64
+	}
+	if errAggregate := scope.Session(&gorm.Session{}).Select(`COUNT(*) AS total,
+		AVG(CASE WHEN "usage"."latency_ms" > 0 THEN "usage"."latency_ms" END) AS average_latency_ms,
+		COALESCE(SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END), 0) AS success,
+		COALESCE(SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END), 0) AS failed`).
+		Scan(&totals).Error; errAggregate != nil {
+		return UserRequestLogResult{}, errAggregate
+	}
+	result.Total = totals.Total
+	result.Summary.AverageLatencyMS = totals.AverageLatencyMS
+	result.Summary.Status = UserRequestLogStatusCounts{Success: totals.Success, Failed: totals.Failed}
+	if errModels := scope.Session(&gorm.Session{}).
+		Select(`"usage"."model", COUNT(*) AS requests`).Group(`"usage"."model"`).
+		Order(`requests DESC, "usage"."model" ASC`).Scan(&result.Summary.ByModel).Error; errModels != nil {
+		return UserRequestLogResult{}, errModels
 	}
 	// Do not load payloads, errors, keys, routing, or billing data even internally.
 	selectSQL := fmt.Sprintf(`"usage"."timestamp", "usage"."event_type",

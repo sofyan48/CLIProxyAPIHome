@@ -995,13 +995,26 @@ Invalid dates (including explicit empty values, date-only strings, and Unix seco
   ],
   "total": 1,
   "limit": 50,
-  "offset": 0
+  "offset": 0,
+  "summary": {
+    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
+    "average_latency_ms": 123,
+    "status": {"success": 1, "failed": 0}
+  }
 }
 ```
 
+The response envelope contains `items`, `total`, `limit`, `offset`, and the additive `summary`. SQL aggregates cover **all matching rows before pagination**, using exactly the same ownership, `from`, `to`, and exact `request_id` scope as the items and `total`. `summary` contains:
+
+- `by_model`: `{model: string, requests: number}` entries for every matching model, ordered by `requests` descending, then `model` ascending, without truncation.
+- `average_latency_ms`: the numeric average of positive `latency_ms` measurements only; values `<= 0` are unmeasured and excluded. Returns `null` when no matching row has a positive measurement.
+- `status`: `{success: number, failed: number}`, counted from the same stored failed flag used by item status. Counts sum to `total`; failed rows are included only when they have trustworthy historical attribution.
+
+No matches return `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`. An empty page beyond the last matching row still returns the full filtered summary and `total`.
+
 Every item contains exactly these seven keys: Time (`timestamp`, UTC RFC3339), Event (`event_type`), Status (`status`), Model (`model`), Tokens (`tokens`, accounting total), Latency (`latency_ms`), and Request ID (`request_id`). Event categories are `completion`, `embedding`, `response`, `message`, `stream`, or `unknown`; arbitrary event metadata is not returned. Status is `success` or `failed`, never an error detail or HTTP status code. Items are ordered by timestamp descending, then internal usage ID descending; that ID is not exposed. `total` is the ownership- and filter-scoped count before pagination. Empty results use `items: []`.
 
-Ownership is established only by the historical `billing_charge.user_id` snapshot linked to the usage record, captured when usage is ingested and billing attribution is recorded. Both list and count require this snapshot to match the authenticated user ID. There is **no fallback to the API key's current owner**, no payload-supplied user attribution, and no backfill from current bindings. Reassigning or deleting keys does not transfer historical logs; deleting a user invalidates access and does not transfer their logs to another user. Records with missing/null/unknown attribution are excluded, including legacy, failed, or non-billable records without a snapshot. This endpoint is therefore a fail-closed summary of attributed usage, not a complete raw request-log archive.
+Ownership is established only by the historical `billing_charge.user_id` snapshot linked to the usage record, captured when usage is ingested and billing attribution is recorded. The list, count, and every summary aggregate require this snapshot to match the authenticated user ID. There is **no fallback to the API key's current owner**, no payload-supplied user attribution, and no backfill from current bindings. Reassigning or deleting keys does not transfer historical logs; deleting a user invalidates access and does not transfer their logs to another user. Records with missing/null/unknown attribution are excluded, including legacy, failed, or non-billable records without a snapshot. This endpoint is therefore a fail-closed summary of attributed usage, not a complete raw request-log archive.
 
 Provider, HTTP status codes, client/key identifiers, secrets, routing, billing data, raw payloads, error details, and download URLs are never returned. This endpoint grants no access to administrative list/detail/file-download APIs.
 

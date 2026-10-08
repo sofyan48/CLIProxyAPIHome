@@ -44,7 +44,7 @@ func (h *Handler) ListCurrentUserRequestLogs(c *gin.Context) {
 		return
 	}
 	// Only these parameters are read. Identity overrides and broad searches must
-	// never affect either the selected rows or their count.
+	// never affect the selected rows, count, or aggregates.
 	result, errLogs := h.repo.ListUserRequestLogs(ctx, user.ID, cluster.UserRequestLogQuery{
 		From: from, To: to, RequestID: c.Query("request_id"), Limit: limit, Offset: offset,
 	})
@@ -60,7 +60,7 @@ func (h *Handler) ListCurrentUserRequestLogs(c *gin.Context) {
 			Tokens: record.Tokens, LatencyMS: record.LatencyMS, RequestID: record.RequestID,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": result.Total, "limit": result.Limit, "offset": result.Offset})
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": result.Total, "limit": result.Limit, "offset": result.Offset, "summary": result.Summary})
 }
 
 func userRequestLogTimeQuery(c *gin.Context, key string) (*time.Time, bool) {
