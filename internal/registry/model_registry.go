@@ -16,6 +16,10 @@ import (
 // NativeCapabilities preserves tri-state capabilities from the model catalog.
 type NativeCapabilities struct {
 	WebSearch *bool `json:"web_search,omitempty"`
+	// ToolSearch is computed per Claude route for the CPA models payload: true
+	// only when every credential behind the route supports Anthropic native
+	// tool search for the model. It is not part of the static catalog.
+	ToolSearch *bool `json:"tool_search,omitempty"`
 }
 
 // ModelInfo represents information about an available model

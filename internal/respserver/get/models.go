@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	"github.com/tidwall/sjson"
@@ -69,10 +70,14 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 
 	type modelBucket struct {
 		byID map[string]*registry.ModelInfo
+		// toolSearch ANDs native tool search support across every credential
+		// that serves a model in the Claude bucket.
+		toolSearch map[string]bool
 	}
 
 	buckets := make(map[string]*modelBucket)
-	addModel := func(groupKey string, model *registry.ModelInfo) {
+	manager := env.Runtime.CoreManager()
+	addModel := func(groupKey string, auth *coreauth.Auth, model *registry.ModelInfo) {
 		groupKey = strings.TrimSpace(groupKey)
 		if groupKey == "" || model == nil {
 			return
@@ -84,8 +89,15 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		idKey := strings.ToLower(id)
 		b := buckets[groupKey]
 		if b == nil {
-			b = &modelBucket{byID: make(map[string]*registry.ModelInfo)}
+			b = &modelBucket{byID: make(map[string]*registry.ModelInfo), toolSearch: make(map[string]bool)}
 			buckets[groupKey] = b
+		}
+		if groupKey == claudeModelsGroupKey {
+			supported := home.ClaudeNativeToolSearchSupported(auth, manager.ResolveExecutionModel(auth, id))
+			if previous, seen := b.toolSearch[idKey]; seen {
+				supported = previous && supported
+			}
+			b.toolSearch[idKey] = supported
 		}
 		if _, exists := b.byID[idKey]; exists {
 			return
@@ -94,7 +106,7 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 	}
 
 	reg := registry.GetGlobalRegistry()
-	auths := env.Runtime.CoreManager().List()
+	auths := manager.List()
 	for _, auth := range auths {
 		if auth == nil || auth.Disabled || auth.ID == "" {
 			continue
@@ -105,7 +117,7 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		}
 		models := reg.GetModelsForClient(auth.ID)
 		for _, model := range models {
-			addModel(groupKey, model)
+			addModel(groupKey, auth, model)
 		}
 	}
 
@@ -122,7 +134,10 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 			continue
 		}
 		models := make([]*registry.ModelInfo, 0, len(b.byID))
-		for _, model := range b.byID {
+		for idKey, model := range b.byID {
+			if key == claudeModelsGroupKey {
+				model = withToolSearchCapability(model, b.toolSearch[idKey])
+			}
 			models = append(models, model)
 		}
 		sort.Slice(models, func(i, j int) bool {
@@ -133,4 +148,20 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		out, _ = sjson.Set(out, key, models)
 	}
 	return out, nil
+}
+
+// claudeModelsGroupKey is the models payload bucket served by Claude credentials.
+const claudeModelsGroupKey = "claude"
+
+// withToolSearchCapability returns a copy of model carrying the route's native
+// tool search capability, leaving the registry's model untouched.
+func withToolSearchCapability(model *registry.ModelInfo, supported bool) *registry.ModelInfo {
+	copyModel := *model
+	capabilities := registry.NativeCapabilities{}
+	if model.NativeCapabilities != nil {
+		capabilities = *model.NativeCapabilities
+	}
+	capabilities.ToolSearch = &supported
+	copyModel.NativeCapabilities = &capabilities
+	return &copyModel
 }

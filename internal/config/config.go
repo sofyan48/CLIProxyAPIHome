@@ -471,6 +471,9 @@ type ClaudeKey struct {
 	RebuildMidSystemMessage bool                     `yaml:"rebuild-mid-system-message,omitempty" json:"rebuild-mid-system-message,omitempty"`
 	RequestScopedErrors     []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 	FingerprintProfile      string                   `yaml:"fingerprint-profile,omitempty" json:"fingerprint-profile,omitempty"`
+	// NativeToolSearch trusts a custom base URL with Anthropic native tool search
+	// (defer_loading tools and tool_reference results) for Codex tool_search.
+	NativeToolSearch bool `yaml:"native-tool-search,omitempty" json:"native-tool-search,omitempty"`
 }
 
 // GetAPIKey returns an api key.

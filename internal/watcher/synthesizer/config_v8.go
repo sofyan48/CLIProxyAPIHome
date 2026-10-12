@@ -22,7 +22,7 @@ func addV8CredentialOptions(entry any, attrs map[string]string, metadata map[str
 	if options == nil {
 		options = make(map[string]any)
 	}
-	for _, key := range []string{"weight", "disable-codex-cloaking", "request-scoped-errors", "rebuild-mid-system-message", "fingerprint-profile", "support-prompt-cache-key", "models"} {
+	for _, key := range []string{"weight", "disable-codex-cloaking", "request-scoped-errors", "rebuild-mid-system-message", "fingerprint-profile", "native-tool-search", "support-prompt-cache-key", "models"} {
 		value, exists := fields[key]
 		// Keep empty model configuration distinguishable from older payloads.
 		if !exists || (value == nil && key != "models") {
