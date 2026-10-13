@@ -168,6 +168,8 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `PATCH` | `/credentials/fields` |
 | `GET` | `/credentials/in-flight` |
 | `GET` | `/credentials/in-flight/summary` |
+| `GET` | `/credentials/model-states` |
+| `GET` | `/credentials/:credential_id/model-states` |
 | `GET` | `/credentials/models` |
 | `POST` | `/credentials/quota/fetch` |
 | `GET` | `/credentials/quota/providers` |
@@ -244,10 +246,13 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
+| `POST` | `/users/:id/approve` |
+| `POST` | `/users/:id/topup/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
+| `PUT` | `/users/:id/reset-allowance` |
 | `GET` | `/users/:id/period-limits` |
 | `POST` | `/users/:id/period-limits/reset` |
 
@@ -984,6 +989,22 @@ Example response:
 }
 ```
 
+All management user response maps include the boolean `approval_pending`. Public registration sets it to `true`; existing users and users created by `POST /users` default to `false`. Generic user create/update input does not change this flag.
+
+### POST `/users/:id/approve`
+
+Approves a publicly registered account. Requires the same administrator Management API authentication as other `/users` routes; user bearer tokens do not authorize this operation. No request body is required. `id` must be a positive user ID.
+
+Optional body: `{"model_groups": [1, 2]}`. If provided, `model_groups` must be a nonempty array of positive integer IDs referencing existing, non-deleted, enabled model groups (`disabled: false`). Home assigns this scope to all existing active (non-deleted) API keys owned by the pending user, preserving key values, display names, channel bindings, and other fields. If the user has no active keys, Home creates one cryptographically random `sk-` key with this scope and empty channel bindings. Scope validation, key changes, the configuration event, and clearing `approval_pending` commit in one database transaction; failure leaves the user pending and keys unchanged. Omitting the body or `model_groups` preserves approval-only behavior: no keys are created or changed.
+
+Returns HTTP 200 with `{"user": ...}` in the same shape as `GET /users/:id`, with `approval_pending: false`. No API key value is returned; after login the user can retrieve keys from `GET /user/api-keys`. New user keys created with omitted `model_groups` inherit the union of model group IDs on that user's existing active keys; an explicit empty array retains the existing unrestricted-key behavior. Model scopes are stored on API keys, not the user record.
+
+Approval never changes passwords, MFA, passkeys, or session versions and does not issue a user session. Already-approved users return success without changing scopes, generating keys, or adding configuration events (well-formed supplied scopes are ignored). Malformed JSON returns HTTP 400 `invalid body`. Empty/null scopes, wrong types, non-positive IDs, and disabled groups return HTTP 400 `invalid_model_groups`; invalid user IDs return HTTP 400 `invalid id`. Missing or deleted users/model groups return HTTP 404 `not_found`. Database failures return HTTP 500 `user_approve_failed`. Management runtime refresh occurs after a scoped approval commits; a refresh failure returns HTTP 500 `reload_failed` but does not undo the committed approval. A retry cannot re-scope the approved user.
+
+Pending users receive HTTP 403 `approval_pending` from User API password/TOTP/passkey/session authentication. Email verification and password reset do not approve accounts. See the [User API](../user/api.md).
+
+The startup migration adds a non-null `approval_pending` column defaulting to `false` (database/snapshot version 8). Older snapshots remain supported and restore users as active.
+
 ### GET `/users/:id`
 
 Reads one user by numeric ID.
@@ -1018,6 +1039,28 @@ Example response:
 ```
 
 User records include `period_limits_summary`, a lightweight overview derived from the record itself (no usage queries): `enabled_windows` lists the windows whose limit is configured (`5h`/`1d`/`7d`/`30d`), and `zero_limit_windows` lists enabled windows with a `0` limit (immediately blocking). Use `GET /users/:id/period-limits` for live used/remaining data.
+
+### Self-topup approval
+
+`GET /users` and `GET /users/:id` include `pending_topup` in each user map: `null` when no request is pending, otherwise `{id,user_id,amount,note,status,created_at}`. IDs are numbers, `status` is `pending`, and `created_at` is RFC3339. The list retrieves pending requests in one query, not per-user queries. This supports approval actions in the **Users & Access user list** without changing the UI here. Account approval (`approval_pending` and `/users/:id/approve`) remains separate and unchanged.
+
+#### POST `/users/:id/topup/approve`
+
+Requires Management API authentication, not a User API bearer token. Request: `{ "request_id": 123 }`; the ID is mandatory and must be a positive integer. Amount and note are read from the stored request, never from the approval payload. The request must belong to `:id`.
+
+Response: `200 { "user": UserMap, "record": BalanceLedgerRecord, "current_balance": number }`. `record` contains `id` (string), `user_id`, `type: "recharge"`, the original `amount` and `note`, `operator: "admin"`, `balance_before`, `balance_after`, and `created_at`. `user.pending_topup` is `null` after approval; `current_balance` is the user's balance at approval/replay. On replay, the same ledger record is returned and funds are not credited again. If a newer request is already pending during replay, `user.pending_topup` reports it, but the old `request_id` never approves it.
+
+| HTTP | Error | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_request_id` | Missing/null/zero/negative/fractional/non-numeric/out-of-range request ID or malformed body. |
+| 400 | `invalid id` | Invalid user path ID (existing user-route validation). |
+| 400 | `invalid_amount` | Stored amount is invalid, resulting balance would overflow, or float64 addition cannot increase the balance. Request remains pending; no ledger/funds change. |
+| 401 | Management authentication error | Missing/invalid administrator secret, including an ordinary User API token. |
+| 404 | `topup_request_not_found` | User/request does not exist or the request belongs to another user. |
+| 500 | `topup_approve_failed` | Transaction failed and rolled back. |
+| 500 | `billing_recharge_request_load_failed` | Pending-request response lookup failed; safe to retry the same ID. |
+
+Approval locks the user and atomically writes the ledger, credits, request status `approved`, `ledger_id`, `approved_at`, and `updated_at`. A database partial unique index permits at most one `pending` request per user. `credits_unlimited` retains existing billing semantics: ledger recorded, numeric balance unchanged. Requests persist in `billing_recharge_request` and are included in schema/snapshot version 9; versions 1–8 remain importable without this table. Both capability APIs advertise `topup_approval: true`; clients should use that flag for older-deployment fallback.
 
 ### POST `/users`
 
@@ -1103,6 +1146,28 @@ Validation failures use the same `field_errors` contract as `POST /users`.
 
 Response: same shape as `GET /users/:id`.
 
+
+### PUT `/users/:id/reset-allowance`
+
+Full endpoint: `PUT /v8/management/users/:id/reset-allowance`. Requires Management API authentication.
+
+```json
+{"mode":"one_time","amount":2,"expires_at":null}
+```
+
+`mode` is required and must be `one_time` or `monthly`; `amount` is required and must be a non-negative signed 64-bit integer. `expires_at` is an optional RFC3339 timestamp or null (omitted means null); non-null expiry is rejected for monthly policies. Every successful PUT replaces the single policy and immediately initializes the persisted balance to `amount`; it never resets windows or modifies credits/history. Amount zero disables consumption.
+
+HTTP 200 returns `{"user": <management user map>}`. User maps (including list/detail) and period-limit status include `reset_allowance`:
+
+```json
+{"mode":"monthly","amount":2,"available":2,"expires_at":null,"renews_at":"2026-11-01T00:00:00Z"}
+```
+
+`available` is the effective remaining balance. One-time policies have null `renews_at` and become unavailable at or after `expires_at`. Monthly policies have null `expires_at` and replenish to `amount` at midnight on the first of each calendar month in the user timezone (default `Asia/Shanghai`), with no carry, including skipped months. Reads calculate renewal without writes; consumption persists it transactionally. Timestamps are RFC3339; unconfigured users return `{"mode":"","amount":0,"available":0,"expires_at":null,"renews_at":null}`.
+
+Invalid bodies/policies return HTTP 400; missing users return 404. Policy validation uses `field_errors` codes `invalid_reset_allowance_mode`, `invalid_reset_allowance_amount`, or `invalid_reset_allowance_expiry`. Both Management and User capability manifests advertise `capabilities.user_reset_allowance: true`.
+
+The existing admin `POST /users/:id/period-limits/reset` retains selectors/modes and does not consume this allowance.
 
 ### GET `/users/:id/period-limits`
 
@@ -1481,7 +1546,7 @@ Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both s
 
 All paths in this section are relative to the Management API base URL, for example `/v8/management/billing/overview` or `/v8/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
-The separate [User API billing endpoints](../user/api.md#billing) provide session-scoped `GET /user/billing/balance-records`, `POST /user/billing/recharge`, and an expanded overview. User recharge intentionally permits unrestricted self-credit without payment or vouchers, ignores supplied user IDs, and records the session user as operator. It does not change these administrator routes. Balance updates that would produce a non-finite balance fail and roll back.
+The separate [User API billing endpoints](../user/api.md#billing) provide session-scoped balance records, overview, `POST /user/billing/recharge`, and `GET /user/billing/recharge-request`. Self-topups now require administrator approval: submission returns HTTP 202 without changing balance or creating a ledger, and a second pending submission returns `409 topup_pending`. Approval uses `/users/:id/topup/approve` below and records `admin` as operator. Administrator direct recharge/deduction routes remain unchanged. Balance updates that would produce a non-finite balance fail and roll back.
 
 Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. All three routes use the half-open interval `[from,to)`: `from` is included and `to` is excluded. The optional `timezone` parameter is a reporting-timezone override and must be an IANA timezone name. When omitted, the routes use `/billing/settings.report_timezone`, which defaults to `UTC`. Date-only values use calendar dates in the applied reporting timezone, and a date-only `to` is normalized to the next local midnight so the whole ending day remains included across DST transitions. Explicit timestamps are exact exclusive boundaries and are not shifted or expanded by the reporting timezone. `/billing/overview` also uses the applied reporting timezone for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. The reporting timezone only controls query boundaries and report grouping; it never reprices immutable charges, changes price snapshots, or mutates user balances. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
@@ -1963,6 +2028,7 @@ Each key can specify integer `weight`; omission defaults to `1`, the maximum is 
 | `cloak` | Claude | Object with `mode`, `strict-mode`, `sensitive-words`, and `cache-user-id`. |
 | `experimental-cch-signing` | Claude | Retained for compatibility; signing is automatic on supported direct upstreams. |
 | `rebuild-mid-system-message` | Claude | Rebuilds system messages found in the conversation body. |
+| `native-tool-search` | Claude | Trusts a custom base URL with Anthropic native tool search (`defer_loading` + `tool_reference`) for Codex `tool_search`; official `api.anthropic.com` keys use it automatically. Requires `upstream.claude.tool-search: true`. |
 | `fingerprint-profile` | Claude | Optional fingerprint profile such as `claude-code-cli`; empty leaves the caller's profile in control. |
 | `request-scoped-errors` | Gemini/Interactions, Claude, Codex, xAI, Meta | Overrides inherited request-scoped error rules. |
 
@@ -2104,6 +2170,88 @@ Example response:
   ]
 }
 ```
+
+### GET `/credentials/model-states` and `/credentials/:credential_id/model-states`
+
+Reads per-model execution history and effective availability from the **current Home node's runtime**. This is a read-only snapshot: it does not select credentials, read full credentials from the database, merge persisted state, or aggregate other Home nodes.
+
+Legacy v0 list path: `GET /auth-files/model-states`.
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `credential_id` | string | Optional exact credential ID filter on the list route. The single-credential route uses the path ID. Filename and display-name selectors are not supported. |
+| `provider` | string | Optional case-insensitive provider filter, such as `xai` or `codex`. |
+| `model` | string | Optional case-insensitive model filter. Supports visible prefixed IDs, configured API-key/OAuth aliases, bare aliases under forced prefixes, and upstream model IDs. Routes sharing the resolved upstream model can all match, regardless of filter prefix/model casing. This diagnostic behavior does not change Dispatch's prefix matching rules. |
+
+The list route **always** returns `{status, source, node, observed_at, total, credentials}`, including when `credential_id` is supplied. Unmatched credentials and credentials without matching models are excluded; no matches returns `total: 0` and `credentials: []`.
+
+The path route returns `{status, source, node, observed_at, credential}`. A missing credential, empty/whitespace-only path ID, or mismatched provider returns `404 credential_not_found`; a supplied path ID is never replaced by a query ID. A model filter without matches returns the credential with `models: []`. Both routes return `503 runtime_unavailable` if the runtime auth manager is unavailable.
+
+Single-credential example:
+
+```json
+{
+  "status": "ok",
+  "source": "runtime",
+  "node": {"ip": "192.0.2.10", "port": 8317},
+  "observed_at": "2026-10-09T08:05:00Z",
+  "credential": {
+    "credential_id": "auth-uuid-1",
+    "provider": "xai",
+    "prefix": "team",
+    "state_version": 7,
+    "status": "error",
+    "disabled": false,
+    "unavailable": false,
+    "refresh_blocked": false,
+    "models": [
+      {
+        "model": "team/fast",
+        "upstream_model": "grok-4.7-build-fast",
+        "state_key": "grok-4.7-build-fast",
+        "registered": true,
+        "status": "error",
+        "status_message": "context canceled",
+        "unavailable": true,
+        "blocked": false,
+        "block_reason": "none",
+        "last_error": {
+          "http_status": 499,
+          "message": "context canceled",
+          "retryable": false
+        },
+        "updated_at": "2026-10-09T08:01:16Z"
+      }
+    ]
+  }
+}
+```
+
+Snapshot and credential fields:
+
+- `source` is always `runtime`; `node` identifies the queried Home IP/port and `observed_at` is the availability evaluation time.
+- `state_version` is the last accepted storage revision of the runtime credential, not a revision counter for every local execution result. Local model history may be newer.
+- `prefix`, `label`, `status_message`, credential-level `last_error`, and credential-level `next_retry_after` are included when present.
+- `refresh_blocked` reports a credential-level refresh gate. Such a gate, or a disabled credential, can block all models even without model error history.
+
+Model fields:
+
+| Field | Meaning |
+| --- | --- |
+| `model` | Client-visible registered route ID, or an unregistered historical state key. |
+| `upstream_model` | Upstream model ID resolved through the same prefix and alias pipeline as Dispatch. Historical unregistered keys are not aliased again. |
+| `state_key` | Key supplying the returned model history. Normally the upstream ID; it can be the legacy route key when that state blocks dispatch or upstream history is absent. Credential-level refresh or disabled gates do not hide existing model history. |
+| `registered` | Whether this credential currently registers this route. A historical state with `registered: false` is not a dispatchable route. |
+| `display_name` | Optional registered model display name. |
+| `status`, `status_message`, `unavailable`, `last_error`, `quota`, `updated_at` | Recorded execution state for `state_key`, not an assertion of current availability. |
+| `blocked`, `block_reason` | Effective credential/model state gate after current global and credential-level `disable-cooling` policy. Reasons: `none`, `cooldown` (quota), `disabled`, or `other` (including refresh and non-quota errors). |
+| `next_retry_after`, `remaining_cooldown` | Future effective retry deadline and remaining time for a blocked model. Remaining time rounds up to whole seconds. Omitted when unblocked or no future deadline exists. |
+
+A recorded 499 with no retry deadline can therefore have `status: error`, `unavailable: true`, and `blocked: false`. Disabling cooling also preserves recorded errors while removing covered effective gates. If a legacy alias state blocks a route, its error details and effective retry deadline are returned together.
+
+Optional model fields are omitted rather than serialized as `null`; `quota` is included only when exceeded or when its recorded recovery time is non-zero. Models and credentials are sorted by ID.
+
+**Scope:** `blocked: false` does not guarantee that a request will be selected. The snapshot does not inspect scheduler shard caches, full-credential rechecks, API-key/channel permissions, weights, retry exclusions, concurrency admission, or upstream model health. Query each Home node separately when diagnosing node-specific behavior.
 
 ### GET `/credentials/download`
 
@@ -2251,7 +2399,8 @@ Editable fields:
 | `disabled` | boolean or string bool | Updates auth disabled state and status. |
 | `disable-cooling` | boolean or `null` | Credential cooling override. `true` disables cooling, `false` enables it, and `null` clears the override so the credential inherits the global setting. The hyphenated response field is accepted directly by this PATCH route. |
 | `request-retry` | integer or `null` | Additional credential retry-round override. `0` disables additional rounds; `null` or a negative value inherits the global setting. Both `request-retry` and `request_retry` are accepted; when both appear together, `request_retry` takes precedence. |
-| any nested path | any valid JSON | Sets arbitrary metadata paths such as `token.access_token`. |
+| `excluded_models`, `excluded-models` | string array or `null` | Per-credential model exclusion patterns, merged with global OAuth exclusions. `[]` or `null` clears only the per-credential list. When both names are provided, `excluded_models` takes precedence. Invalid types, non-string array elements, and nested paths under this field return `400` without applying any changes. |
+| any other nested path | any valid JSON | Sets arbitrary metadata paths such as `token.access_token`. |
 
 Example response:
 
@@ -2709,6 +2858,7 @@ Response fields:
 | `capabilities.model_channel_bindings` | boolean | Whether model group details support model-specific channel group bindings through `channels`. |
 | `capabilities.topology` | boolean | Whether `GET /topology` is available for Home + CPA cluster topology. |
 | `capabilities.users` | boolean | Whether the `/users` user-management routes are available. |
+| `capabilities.topup_approval` | boolean | Self-topups require approval; pending user maps and `/users/:id/topup/approve` are available. Also advertised by the User API. |
 | `capabilities.access_groups` | boolean | Whether the `/channel-groups` and `/model-groups` access-scope routes are available. |
 | `capabilities.user_period_limits` | boolean | Whether user period-limit configuration fields plus `GET /users/:id/period-limits` and `POST /users/:id/period-limits/reset` are available. |
 | `capabilities.credential_in_flight_snapshots` | boolean | Whether the independent CPA in-flight observation snapshot APIs are available. |
@@ -4032,6 +4182,7 @@ These fields supplement the reference above. Settings under `oauth.providers` ap
 | `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | Relay UDP port range. |
 | `oauth.providers.codex.live-media-relay.ice-servers` | object array | Each entry has `urls` and optional `username` / `credential`; JSON reads redact the latter two. |
 | `upstream.claude.model-level-cooling` | boolean | Scopes Claude quota cooldown to a model. |
+| `upstream.claude.tool-search` | boolean | Enables Codex client `tool_search` on Claude Responses routes (Anthropic native tool search where supported); default `false` keeps the pre-tool-search behavior. |
 | `upstream.claude.disable-claude-cloak-mode` | boolean | Disables Claude cloaking on OAuth and opted-in API-key CLI profiles. |
 | `upstream.claude.disable-cloaking-model-list` | boolean | Disables model-ID cloaking in Anthropic model-list responses. |
 | `upstream.claude.header-defaults.timezone` | string | Additional Claude header fingerprint default. |
@@ -4113,6 +4264,7 @@ The tables in this appendix compare paths relative to `/v0/management` and `/v8/
 | `/auth-files` | `/credentials` |
 | `/auth-files/download` | `/credentials/download` |
 | `/auth-files/fields` | `/credentials/fields` |
+| `/auth-files/model-states` | `/credentials/model-states` |
 | `/auth-files/models` | `/credentials/models` |
 | `/auth-files/status` | `/credentials/status` |
 | `/get-auth-status` | `/oauth/status` |

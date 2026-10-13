@@ -613,7 +613,11 @@ func validateDatabaseSnapshotRecord(ctx context.Context, model databaseModel, mo
 	for _, field := range modelSchema.Fields {
 		fieldValue, _ := field.ValueOf(ctx, value)
 		if field.NotNull {
-			rawField, present := fields[field.Name]
+			jsonName := field.Name
+			if tagName := strings.Split(field.StructField.Tag.Get("json"), ",")[0]; tagName != "" {
+				jsonName = tagName
+			}
+			rawField, present := fields[jsonName]
 			if !present || bytes.Equal(bytes.TrimSpace(rawField), []byte("null")) {
 				return databaseSnapshotFieldError(model.name, primaryLabel, field.DBName, "must not be null")
 			}

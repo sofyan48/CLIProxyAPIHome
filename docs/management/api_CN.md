@@ -169,6 +169,8 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/credentials/in-flight` |
 | `GET` | `/credentials/in-flight/summary` |
 | `GET` | `/credentials/models` |
+| `GET` | `/credentials/model-states` |
+| `GET` | `/credentials/:credential_id/model-states` |
 | `POST` | `/credentials/quota/fetch` |
 | `GET` | `/credentials/quota/providers` |
 | `POST` | `/credentials/quota/reset` |
@@ -244,10 +246,13 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
+| `POST` | `/users/:id/approve` |
+| `POST` | `/users/:id/topup/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
+| `PUT` | `/users/:id/reset-allowance` |
 | `GET` | `/users/:id/period-limits` |
 | `POST` | `/users/:id/period-limits/reset` |
 
@@ -983,6 +988,22 @@ User records 存储在 cluster repository 中。
 }
 ```
 
+所有管理接口用户响应均包含布尔字段 `approval_pending`。公开注册设置为 `true`；现有用户和通过 `POST /users` 创建的用户默认为 `false`。通用用户创建/更新请求不能修改此标志。
+
+### POST `/users/:id/approve`
+
+批准公开注册的账户。与其他 `/users` 管理路由一样，需要管理员 Management API 认证；用户 bearer token 无权调用。无需请求体，`id` 必须为正整数用户 ID。
+
+可选请求体：`{"model_groups": [1, 2]}`。提供时，`model_groups` 必须是非空正整数 ID 数组，引用存在、未删除且启用（`disabled: false`）的模型组。Home 将范围赋给待审批用户所有有效（未删除）API key，保留 key 值、显示名称、channel 绑定及其他字段。如果没有有效 key，则创建一个密码学随机的 `sk-` key，使用指定范围及空 channel 绑定。范围验证、key 修改、配置事件及清除 `approval_pending` 在同一数据库事务中提交；失败时用户保持待审批，key 不变。省略请求体或 `model_groups` 保留仅审批的旧行为，不创建或修改 key。
+
+返回 HTTP 200，结构为 `{"user": ...}`，与 `GET /users/:id` 相同，其中 `approval_pending: false`。响应不包含 API key 值；用户登录后可通过 `GET /user/api-keys` 获取。创建用户新 key 时省略 `model_groups`，会继承该用户所有有效 key 的模型组 ID 并集；显式空数组保留现有无限制 key 行为。模型范围保存在 API key 上，而非用户记录上。
+
+审批不会改变密码、MFA、passkey 或 session version，也不会签发 session。已审批用户重复请求成功，但不会修改范围、生成 key 或增加配置事件（格式正确的范围被忽略）。JSON 格式错误返回 HTTP 400 `invalid body`；空/null 范围、类型错误、非正整数 ID 或禁用模型组返回 HTTP 400 `invalid_model_groups`；无效用户 ID 返回 HTTP 400 `invalid id`。不存在或已删除的用户/模型组返回 HTTP 404 `not_found`。数据库失败返回 HTTP 500 `user_approve_failed`。带范围的审批提交后刷新管理运行时配置；刷新失败返回 HTTP 500 `reload_failed`，但不会撤销已提交审批，重试不会重新分配范围。
+
+待审批用户在 User API 密码/TOTP/passkey/session 认证时收到 HTTP 403 `approval_pending`。邮箱验证和密码重置不会批准账户。详见 [User API](../user/api_CN.md)。
+
+启动迁移添加非空 `approval_pending` 列，默认 `false`（数据库/快照版本 8）。旧快照仍受支持，恢复的旧用户保持可用。
+
 ### GET `/users/:id`
 
 按数字 ID 读取单个用户。
@@ -1017,6 +1038,28 @@ Path 参数：
 ```
 
 用户记录包含 `period_limits_summary`：由记录本身推导的轻量概览（不查询用量）。`enabled_windows` 列出已配置限额的窗口（`5h`/`1d`/`7d`/`30d`），`zero_limit_windows` 列出限额为 `0`（立即阻断）的窗口。实时 used/remaining 请使用 `GET /users/:id/period-limits`。
+
+### 自助充值批准
+
+`GET /users` 和 `GET /users/:id` 的用户对象增加 `pending_topup`：没有待批准申请时为 `null`，否则为 `{id,user_id,amount,note,status,created_at}`。ID 为数字，状态为 `pending`，时间为 RFC3339。列表通过一次查询批量读取申请，不逐用户查询。此契约支持 **Users & Access 用户列表** 的批准操作，本次不修改 UI。账号批准（`approval_pending`、`/users/:id/approve`）独立且保持不变。
+
+#### POST `/users/:id/topup/approve`
+
+必须使用 Management API 认证，普通 User API bearer token 不可使用。请求：`{ "request_id": 123 }`；ID 必填且必须为正整数。金额和备注只读取数据库申请，不使用批准请求中的金额或备注。申请必须属于路径中的用户。
+
+响应：`200 { "user": UserMap, "record": BalanceLedgerRecord, "current_balance": number }`。分类账包含字符串 `id`、`user_id`、`type: "recharge"`、原始 `amount` 和 `note`、`operator: "admin"`、`balance_before`、`balance_after`、`created_at`。批准后 `user.pending_topup` 为 `null`。重复批准返回同一分类账记录及当前余额，不会重复入账；如果用户已经提交新申请，重试旧 ID 会在用户对象中返回新 `pending_topup`，但绝不会批准新申请。
+
+| HTTP | Error | 说明 |
+| --- | --- | --- |
+| 400 | `invalid_request_id` | ID 缺失/null/零/负数/小数/非数字/越界，或请求体非法。 |
+| 400 | `invalid id` | 用户路径 ID 非法，沿用既有验证。 |
+| 400 | `invalid_amount` | 存储金额非法、余额将溢出或 float64 加法无法增加余额；申请保持待批准，分类账和余额不变。 |
+| 401 | Management 认证错误 | 管理密钥缺失或非法，包括使用普通用户 token。 |
+| 404 | `topup_request_not_found` | 用户或申请不存在，或申请属于其他用户。 |
+| 500 | `topup_approve_failed` | 事务失败并回滚。 |
+| 500 | `billing_recharge_request_load_failed` | 响应中的待批准申请读取失败；可安全重试同一 ID。 |
+
+批准锁定用户，在同一事务内更新余额、分类账、`approved` 状态、`ledger_id`、`approved_at` 和 `updated_at`。数据库部分唯一索引保证每个用户最多一笔 `pending` 申请。`credits_unlimited` 保持既有语义：生成分类账但不改变数值余额。申请持久化于 `billing_recharge_request`，数据库/快照版本 9 包含此表；版本 1–8 仍可导入且不包含申请。用户和管理能力 API 均声明 `topup_approval: true`，客户端应依此兼容旧部署。
 
 ### POST `/users`
 
@@ -1102,6 +1145,28 @@ JSON 语法错误，或请求体无法解析到足以可靠定位具体字段时
 
 输出：与 `GET /users/:id` 相同。
 
+
+### PUT `/users/:id/reset-allowance`
+
+完整端点：`PUT /v8/management/users/:id/reset-allowance`，需要 Management API 认证。
+
+```json
+{"mode":"one_time","amount":2,"expires_at":null}
+```
+
+`mode` 必填，只接受 `one_time` 或 `monthly`；`amount` 必填，为非负有符号 64 位整数。`expires_at` 可省略（等同 null），或为 RFC3339 时间/null；monthly 不允许非 null 过期时间。每次成功设置均替换唯一策略，并立即将数据库余额初始化为 `amount`，不重置窗口，不改变 credits 或历史。amount 为零时无法消费。
+
+HTTP 200 返回 `{"user": <管理用户对象>}`。用户列表/详情对象及周期限额状态包含 `reset_allowance`：
+
+```json
+{"mode":"monthly","amount":2,"available":2,"expires_at":null,"renews_at":"2026-11-01T00:00:00Z"}
+```
+
+`available` 为当前有效余额。one_time 的 `renews_at` 为 null，到达或超过 `expires_at` 后不可消费。monthly 的 `expires_at` 为 null，按用户时区（默认 `Asia/Shanghai`）每月一日零点补充至 amount，不结转，跳过多个月也只补充一次。读取只计算有效状态；消费时在事务内持久化续期。时间为 RFC3339。未配置时返回 `{"mode":"","amount":0,"available":0,"expires_at":null,"renews_at":null}`。
+
+无效请求/策略返回 HTTP 400；用户不存在返回 404。策略校验的 `field_errors` code 为 `invalid_reset_allowance_mode`、`invalid_reset_allowance_amount` 或 `invalid_reset_allowance_expiry`。管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。
+
+原有管理员 `POST /users/:id/period-limits/reset` 保留窗口选择及模式行为，不消费此额度。
 
 ### GET `/users/:id/period-limits`
 
@@ -1480,7 +1545,7 @@ Query 参数：
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v8/management/billing/overview` 或 `/v8/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-独立的 [User API 计费接口](../user/api_CN.md#billing) 提供 session 范围的 `GET /user/billing/balance-records`、`POST /user/billing/recharge` 和扩展概览。用户充值有意允许无需支付或兑换券的无限制自助增加余额，忽略传入的用户 ID，并将 session 用户记录为操作人。管理员路由保持不变。导致非有限余额的更新会失败并回滚。
+独立的 [User API 计费接口](../user/api_CN.md#billing) 提供 session 范围的分类账、概览、`POST /user/billing/recharge` 和 `GET /user/billing/recharge-request`。自助充值必须由管理员批准：提交返回 HTTP 202，不修改余额、不生成分类账；已有待批准申请时再次提交返回 `409 topup_pending`。管理员通过下述 `/users/:id/topup/approve` 批准，分类账操作人为 `admin`。管理员直接充值/扣减路由保持不变。导致非有限余额的更新会失败并回滚。
 
 只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。三个路由统一使用半开区间 `[from,to)`：包含 `from`，不包含 `to`。可选的 `timezone` 参数是报表时区覆盖，并且必须是 IANA 时区名称。未提供时，路由使用 `/billing/settings.report_timezone`，该设置默认为 `UTC`。纯日期值使用实际报表时区中的日历日期，纯日期形式的 `to` 会规范化为下一个本地零点，因此即使跨越 DST，也会完整包含结束日期。显式时间戳是精确的排他上界，不会因报表时区被移动或扩展。`/billing/overview` 还使用实际报表时区生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。报表时区只控制查询边界和报表分组，不会重新计算不可变 charge、修改价格快照或改变用户余额。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
@@ -1962,6 +2027,7 @@ key 上缺省或为 `null` 的共享字段继承分组值，再使用该字段�
 | `cloak` | Claude | 包含 `mode`、`strict-mode`、`sensitive-words`、`cache-user-id` 的对象。 |
 | `experimental-cch-signing` | Claude | 兼容保留；支持的直连上游已自动签名。 |
 | `rebuild-mid-system-message` | Claude | 重建会话正文中间的 system 消息。 |
+| `native-tool-search` | Claude | 信任自定义 base URL 支持 Anthropic 原生 tool search（`defer_loading` + `tool_reference`），用于 Codex `tool_search`；官方 `api.anthropic.com` 凭证自动启用。需要开启 `upstream.claude.tool-search`。 |
 | `fingerprint-profile` | Claude | 可选指纹配置，如 `claude-code-cli`；空值由调用方控制。 |
 | `request-scoped-errors` | Gemini/Interactions、Claude、Codex、xAI、Meta | 覆盖继承的请求级错误规则。 |
 
@@ -2102,6 +2168,88 @@ Query 参数：
   ]
 }
 ```
+
+### GET `/credentials/model-states` 与 `/credentials/:credential_id/model-states`
+
+读取**当前 Home 节点运行时**中的模型执行历史和有效阻断状态。这是只读快照，不进行凭证选取、不读取数据库完整凭证、不混合持久化状态，也不汇总其他 Home 节点。
+
+v0 兼容列表路径：`GET /auth-files/model-states`。
+
+| Query | 类型 | 说明 |
+| --- | --- | --- |
+| `credential_id` | string | 列表接口按精确 credential ID 过滤；单凭证接口使用路径 ID。不支持 filename 或 display name 查询。 |
+| `provider` | string | 可选，按 provider 过滤（如 `xai`、`codex`），不区分大小写。 |
+| `model` | string | 可选，不区分大小写。支持带前缀的可见 ID、API-key/OAuth alias、强制前缀下的裸 alias 和上游模型 ID。映射到同一上游模型的多个可见路由均可能匹配，筛选前缀和模型名的大小写不影响匹配结果。此诊断行为不改变 Dispatch 的前缀匹配规则。 |
+
+列表接口**始终**返回 `{status, source, node, observed_at, total, credentials}`，携带 `credential_id` 时也不改变结构。不匹配的凭证及无匹配模型的凭证不会返回；无结果时为 `total: 0`、`credentials: []`。
+
+路径接口返回 `{status, source, node, observed_at, credential}`。凭证不存在、路径 ID 为空或仅含空白、provider 不匹配时返回 `404 credential_not_found`；已提供的路径 ID 不会被 query ID 替换。model 无匹配时返回该凭证及 `models: []`。运行时 auth manager 不可用时，两个接口均返回 `503 runtime_unavailable`。
+
+单凭证响应示例：
+
+```json
+{
+  "status": "ok",
+  "source": "runtime",
+  "node": {"ip": "192.0.2.10", "port": 8317},
+  "observed_at": "2026-10-09T08:05:00Z",
+  "credential": {
+    "credential_id": "auth-uuid-1",
+    "provider": "xai",
+    "prefix": "team",
+    "state_version": 7,
+    "status": "error",
+    "disabled": false,
+    "unavailable": false,
+    "refresh_blocked": false,
+    "models": [
+      {
+        "model": "team/fast",
+        "upstream_model": "grok-4.7-build-fast",
+        "state_key": "grok-4.7-build-fast",
+        "registered": true,
+        "status": "error",
+        "status_message": "context canceled",
+        "unavailable": true,
+        "blocked": false,
+        "block_reason": "none",
+        "last_error": {
+          "http_status": 499,
+          "message": "context canceled",
+          "retryable": false
+        },
+        "updated_at": "2026-10-09T08:01:16Z"
+      }
+    ]
+  }
+}
+```
+
+快照及凭证字段：
+
+- `source` 固定为 `runtime`；`node` 标识当前查询的 Home IP/端口，`observed_at` 为阻断判断时间。
+- `state_version` 是该运行时凭证最后接受的存储版本，并不是每次本地请求结果的递增版本；本地模型历史可能更新于此版本。
+- `prefix`、`label`、`status_message`、凭证级 `last_error` 和凭证级 `next_retry_after` 有值时返回。
+- `refresh_blocked` 标识凭证级刷新阻断。刷新阻断或禁用凭证可以在没有模型错误历史时阻断所有模型。
+
+模型项字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `model` | 已注册的客户端可见路由 ID，或未注册的历史状态键。 |
+| `upstream_model` | 复用 Dispatch 的前缀与 alias 解析所得上游模型 ID。未注册的历史状态键不会再次做 alias 解析。 |
+| `state_key` | 本次返回模型历史所使用的键。通常为上游 ID；旧路由状态阻断调度或上游历史不存在时，可以是旧路由键。凭证级刷新阻断或禁用不会隐藏已有模型历史。 |
+| `registered` | 当前凭证是否注册了该路由。`registered: false` 的历史状态不代表路由可被调度。 |
+| `display_name` | 可选，已注册模型的显示名。 |
+| `status`、`status_message`、`unavailable`、`last_error`、`quota`、`updated_at` | `state_key` 的执行历史，不等于当前有效可用性。 |
+| `blocked`、`block_reason` | 应用当前全局及凭证级 `disable-cooling` 策略后的凭证/模型状态阻断。原因为 `none`、`cooldown`（额度）、`disabled` 或 `other`（包括刷新与非额度错误）。 |
+| `next_retry_after`、`remaining_cooldown` | 被阻断模型的未来有效重试时间和剩余时间，剩余时间向上取整到秒。未阻断或不存在未来截止时间时省略。 |
+
+因此，499 记录没有重试截止时间时，可以同时表现为 `status: error`、`unavailable: true`、`blocked: false`。禁用冷却也会保留历史错误，但移除对应的有效阻断。旧 alias 状态阻断路由时，返回它的错误详情及对应有效重试时间，避免字段来自不同状态。
+
+模型可选字段无值时省略，不序列化为 `null`；只有额度已超限或记录的恢复时间非零时返回 `quota`。模型与凭证均按 ID 排序。
+
+**范围限制：** `blocked: false` 不保证请求一定会选中该凭证。此快照不检查调度分片缓存、完整凭证复查、API-key/渠道权限、权重、重试排除、并发准入或上游模型健康情况。排查节点差异时，应分别查询每个 Home 节点。
 
 ### GET `/credentials/download`
 
@@ -2249,7 +2397,8 @@ Selector 字段：
 | `disabled` | boolean or string bool | 更新 auth disabled state 和 status。 |
 | `disable-cooling` | boolean 或 `null` | 凭证级 cooling 覆盖。`true` 禁用冷却，`false` 启用冷却，`null` 清除覆盖并继承全局设置。该 hyphenated response 字段可直接用于此 PATCH 接口。 |
 | `request-retry` | integer 或 `null` | 凭证级额外重试轮次覆盖。`0` 禁用额外轮次；`null` 或负值继承全局设置。接受 `request-retry` 和 `request_retry`；两者同时提供时以 `request_retry` 优先。 |
-| 任意 nested path | any valid JSON | 可以设置任意 metadata path，例如 `token.access_token`。 |
+| `excluded_models`, `excluded-models` | string array 或 `null` | 凭证级模型排除规则，与全局 OAuth 排除规则合并。`[]` 或 `null` 仅清除凭证级规则。两种名称同时提供时以 `excluded_models` 优先。非法类型、包含非字符串元素的数组及该字段下的 nested path 返回 `400`，不会应用任何修改。 |
+| 其他任意 nested path | any valid JSON | 可以设置任意 metadata path，例如 `token.access_token`。 |
 
 输出示例：
 
@@ -2707,6 +2856,7 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.model_channel_bindings` | boolean | model group detail 是否支持通过 `channels` 配置模型级 channel group 绑定。 |
 | `capabilities.topology` | boolean | 是否支持 `GET /topology` Home + CPA 集群拓扑接口。 |
 | `capabilities.users` | boolean | 是否支持 `/users` 用户管理路由。 |
+| `capabilities.topup_approval` | boolean | 自助充值需要批准，支持待批准用户字段和 `/users/:id/topup/approve`；用户能力 API 也声明此字段。 |
 | `capabilities.access_groups` | boolean | 是否支持 `/channel-groups` 与 `/model-groups` 访问范围路由。 |
 | `capabilities.user_period_limits` | boolean | 是否支持用户周期限额配置字段，以及 `GET /users/:id/period-limits` 和 `POST /users/:id/period-limits/reset`。 |
 | `capabilities.credential_in_flight_snapshots` | boolean | 是否支持独立的 CPA in-flight observation snapshot 接口。 |
@@ -4030,6 +4180,7 @@ Query 参数：
 | `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | 中继 UDP 端口范围。 |
 | `oauth.providers.codex.live-media-relay.ice-servers` | object array | 每项包含 `urls` 和可选 `username` / `credential`；JSON 读取隐藏后两者。 |
 | `upstream.claude.model-level-cooling` | boolean | 将 Claude 额度冷却限定到模型。 |
+| `upstream.claude.tool-search` | boolean | 在 Claude Responses 路由上启用 Codex 客户端 `tool_search`（支持时使用 Anthropic 原生 tool search）；默认 `false` 保持引入 tool_search 之前的行为。 |
 | `upstream.claude.disable-claude-cloak-mode` | boolean | 禁用 Claude OAuth 和显式启用 CLI 指纹的 API Key 请求的 cloaking。 |
 | `upstream.claude.disable-cloaking-model-list` | boolean | 禁用 Anthropic 模型列表响应中的模型 ID cloaking。 |
 | `upstream.claude.header-defaults.timezone` | string | Claude 请求头指纹的 timezone 默认值。 |
@@ -4112,6 +4263,7 @@ Payload 嵌套结构：
 | `/auth-files/download` | `/credentials/download` |
 | `/auth-files/fields` | `/credentials/fields` |
 | `/auth-files/models` | `/credentials/models` |
+| `/auth-files/model-states` | `/credentials/model-states` |
 | `/auth-files/status` | `/credentials/status` |
 | `/get-auth-status` | `/oauth/status` |
 | `/latest-version` | `/server/latest-version` |

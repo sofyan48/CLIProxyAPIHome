@@ -59,7 +59,7 @@ Public routes:
 | --- | --- | --- |
 | `GET` | `/capabilities` | Reports optional User API capabilities. |
 | `GET` | `/models` | Returns the public model catalog. |
-| `POST` | `/register` | Creates a user and returns a bearer token. |
+| `POST` | `/register` | Creates a pending user; returns HTTP 202 without a bearer token. |
 | `POST` | `/login` | Password login for users without passkey and without TOTP. |
 | `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
 | `POST` | `/login/passkey` | Passkey login. |
@@ -67,7 +67,9 @@ Public routes:
 | `POST` | `/password/forgot` | Accepts a generic password-recovery request. |
 | `POST` | `/password/reset` | Consumes a reset token and sets a new password. |
 
-All other `/user/*` routes require a bearer token returned by a successful register or login response.
+Passkey login begin/options are also public. Protected `/user/*` routes require a bearer token returned by a successful login response.
+
+Publicly registered users must be approved by an administrator through `POST /v8/management/users/:id/approve`. Until then, password/TOTP login, passkey login begin/finish, and bearer-session authentication (including `/me`) return HTTP 403 with `{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`. Email verification and password reset neither clear approval status nor issue a session. Existing users and administrator-created users remain active.
 The bearer token is an RS256 JWT signed with the cluster root CA private key and verified with the cluster root CA public key. Replacing the cluster root CA invalidates previously issued User API tokens.
 Bearer tokens also carry the user's current session version. A successful password change, password reset, or Management API password update increments that version and invalidates older bearer tokens. Authenticated password changes return a replacement bearer session for the current client; password reset does not log the user in.
 Password values are hashed and verified exactly as provided; leading and trailing whitespace is not trimmed. New bcrypt passwords are limited to 72 UTF-8 bytes.
@@ -104,7 +106,7 @@ Most successful delete or simple write operations return:
 { "status": "ok" }
 ```
 
-Successful login and register responses return:
+Successful login responses return:
 
 ```json
 {
@@ -215,7 +217,8 @@ Example response:
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
-    "model_catalog": true
+    "model_catalog": true,
+        "request_logs": true
   },
   "server_info": {
     "home_version": "v1.2.3",
@@ -261,7 +264,15 @@ Fields:
 | `password` | string | yes | Plaintext password used to create the stored password hash. |
 | `email` | string | no | Optional email. Accepted only when `email_registration` is true. It is normalized and starts unverified; it does not reserve ownership until verification succeeds. |
 
-Response: login response shape. When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
+Response: HTTP **202 Accepted**, with no bearer token or session:
+
+```json
+{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
+```
+
+The account is persisted with `approval_pending: true`; this flag cannot be overridden by registration input. The client should show the message rather than enter the authenticated workspace. After administrator approval, the user can log in normally.
+
+When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
 
 All registration attempts are limited per source IP and globally, including username-only registration. Verification delivery has its own target-email limits. A limited response is `429 registration_rate_limited` with `Retry-After`.
 
@@ -917,6 +928,24 @@ When `status` is `insufficient_data`, no rate, latency, or throughput is publish
 
 ## Period Limits
 
+### POST `/period-limits/reset`
+
+Full endpoint: `POST /user/period-limits/reset`. Requires the current user bearer session. Send **no body and no query parameters** (even `{}` is rejected). No user/window/mode selectors are accepted.
+
+One successful request consumes exactly one allowance and resets ALL enabled `5h`/`1d`/`7d`/`30d` windows, including limits of zero. Disabled (null-limit) windows are untouched. It clears enabled window starts and advances usage epochs using the existing counter-reset semantics. Limits, credits, billing charges, balance records and request history are unchanged; a zero limit remains zero.
+
+HTTP 200 response: `{"status":"ok","limits": <complete period-limit status including reset_allowance>}`. Status is rebuilt inside the same transaction as row locking, renewal, guarded decrement and window reset. Any failure rolls back all changes.
+
+HTTP 400 (`error: "invalid body"`) rejects bodies/selectors. HTTP 409 returns `error: "reset_allowance_no_enabled_windows"` when no window is enabled, or `error: "reset_allowance_unavailable"` for unconfigured, expired or exhausted allowance. Error responses contain `error` and `message`. Existing session rules apply: 401 for invalid/missing sessions; 403 `approval_pending` for pending users. Unexpected database failures return 500 `period_limits_reset_failed`.
+
+Both capability manifests advertise `capabilities.user_reset_allowance: true`. `GET /user/period-limits` includes the object:
+
+```json
+{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
+```
+
+`mode` is `one_time`, `monthly`, or empty when unconfigured; amount/available are non-negative integers. Unconfigured status has empty mode, zero amount/available and null timestamps. One-time expiry is RFC3339/null and makes available zero at or after expiry; renews_at is null. Monthly expires_at is null; renews_at is the next first-of-month midnight in the user timezone (default `Asia/Shanghai`), serialized as RFC3339. Each month replenishes to amount without carry, even after skipped months. Read-only status reflects lazy renewal; successful consumption persists renewal. Administrators configure the policy through `PUT /v8/management/users/:id/reset-allowance`.
+
 ### GET `/period-limits`
 
 Returns the authenticated user's configured period-limit windows and current usage. This route is read-only and never exposes another user's limits.
@@ -949,6 +978,63 @@ Only windows with `enabled: true` are enforced. `used`, `limit`, and `remaining`
   ]
 }
 ```
+
+## User-Owned Request Log Summaries
+
+### GET `/request-logs`
+
+Full endpoint: `GET /user/request-logs`. Requires the current user's bearer session; missing, invalid, expired, revoked, or deleted-user sessions return `401`. Pending users return `403 approval_pending`. `GET /user/capabilities` advertises `request_logs: true`; older builds may omit this flag.
+
+Only these query parameters are supported:
+
+| Parameter | Meaning |
+| --- | --- |
+| `from` | Optional RFC3339 timestamp (fractional seconds and timezone offsets accepted), inclusive. |
+| `to` | Optional RFC3339 timestamp, exclusive. |
+| `request_id` | Optional exact request ID; no substring, suffix, wildcard, or broad search. |
+| `limit` | Positive integer; default 50, clamped to 200. |
+| `offset` | Non-negative integer; default 0. |
+
+Invalid dates (including explicit empty values, date-only strings, and Unix seconds), reversed time ranges, malformed/overflowing integers, non-positive limits, and negative offsets return `400`. Equal time boundaries produce an empty range. Unknown parameters are ignored: `user_id`, `user`, `api_key`, key IDs, `key`, `search`, and administrative filters cannot change ownership, matching, or counts.
+
+```json
+{
+  "items": [
+    {
+      "timestamp": "2026-06-10T01:02:03Z",
+      "event_type": "completion",
+      "status": "success",
+      "model": "gpt-4.1-mini",
+
+      "tokens": 1500,
+      "latency_ms": 123,
+      "request_id": "req-first"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "summary": {
+    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
+    "average_latency_ms": 123,
+    "status": {"success": 1, "failed": 0}
+  }
+}
+```
+
+The response envelope contains `items`, `total`, `limit`, `offset`, and the additive `summary`. SQL aggregates cover **all matching rows before pagination**, using exactly the same ownership, `from`, `to`, and exact `request_id` scope as the items and `total`. `summary` contains:
+
+- `by_model`: `{model: string, requests: number}` entries for every matching model, ordered by `requests` descending, then `model` ascending, without truncation.
+- `average_latency_ms`: the numeric average of positive `latency_ms` measurements only; values `<= 0` are unmeasured and excluded. Returns `null` when no matching row has a positive measurement.
+- `status`: `{success: number, failed: number}`, counted from the same stored failed flag used by item status. Counts sum to `total`; failed rows are included only when they have trustworthy historical attribution.
+
+No matches return `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`. An empty page beyond the last matching row still returns the full filtered summary and `total`.
+
+Every item contains exactly these seven keys: Time (`timestamp`, UTC RFC3339), Event (`event_type`), Status (`status`), Model (`model`), Tokens (`tokens`, accounting total), Latency (`latency_ms`), and Request ID (`request_id`). Event categories are `completion`, `embedding`, `response`, `message`, `stream`, or `unknown`; arbitrary event metadata is not returned. Status is `success` or `failed`, never an error detail or HTTP status code. Items are ordered by timestamp descending, then internal usage ID descending; that ID is not exposed. `total` is the ownership- and filter-scoped count before pagination. Empty results use `items: []`.
+
+Ownership is established only by the historical `billing_charge.user_id` snapshot linked to the usage record, captured when usage is ingested and billing attribution is recorded. The list, count, and every summary aggregate require this snapshot to match the authenticated user ID. There is **no fallback to the API key's current owner**, no payload-supplied user attribution, and no backfill from current bindings. Reassigning or deleting keys does not transfer historical logs; deleting a user invalidates access and does not transfer their logs to another user. Records with missing/null/unknown attribution are excluded, including legacy, failed, or non-billable records without a snapshot. This endpoint is therefore a fail-closed summary of attributed usage, not a complete raw request-log archive.
+
+Provider, HTTP status codes, client/key identifiers, secrets, routing, billing data, raw payloads, error details, and download URLs are never returned. This endpoint grants no access to administrative list/detail/file-download APIs.
 
 ## Billing
 
@@ -1021,11 +1107,30 @@ Response: `200 { "items": BalanceRecord[], "total": integer, "limit": integer, "
 
 ### POST `/billing/recharge`
 
-**Unrestricted self-credit:** directly credits the session user's balance without payment, voucher, or administrator approval. This is not a payment integration. Every successful request applies another recharge; there is no idempotency key.
+Submits a self-topup request for **administrator approval**. Submission does not change the balance or create a ledger record. This is not a payment integration. Only one pending request is allowed per user; a second submission returns `409 topup_pending`.
 
-Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. Optional `note` is a string, trimmed and stored in the ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
+Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. A finite amount that would overflow the balance or is too small to increase its float64 representation returns `400 invalid_amount`. Optional `note` is trimmed and stored in the request, then copied into the approved ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
 
-Response: `200 { "record": BalanceRecord, "current_balance": number }`. Balance mutation and ledger creation use one database transaction via `ApplyBillingBalanceRecord`. Existing `credits_unlimited` behavior is preserved: the ledger records the recharge but the numeric balance is unchanged. Authentication failures return `401`. Database failures (including a resulting balance overflow) return `500 billing_recharge_failed` without a partial ledger/balance mutation.
+Response: HTTP **202**, with the unchanged balance:
+
+```json
+{
+  "request": {
+    "id": 123, "user_id": 1, "amount": 12.5, "note": "optional audit note",
+    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
+    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
+  },
+  "current_balance": 10
+}
+```
+
+Request IDs are numeric; ledger IDs are strings. Approval is performed through `POST /v8/management/users/:id/topup/approve` with the exact `request_id`. Approval credits the immutable database amount exactly once and stores the ledger reference and approval timestamp in the same transaction. Existing `credits_unlimited` behavior is preserved: approval creates a ledger record without changing the numeric balance. Authentication failures return `401`; accounts awaiting account approval return `403 approval_pending`. Database failures return `500 billing_recharge_failed` without a partial mutation.
+
+### GET `/billing/recharge-request`
+
+Authenticated user only. Returns `200 { "request": RechargeRequest | null }`, using the request fields above. It returns only the session user's pending request and ignores supplied user IDs. After approval it returns `null` unless a new pending request exists. Authentication failures return `401` (or `403 approval_pending` for an unapproved account); database errors return `500 billing_recharge_request_load_failed`.
+
+Both `GET /user/capabilities` and `GET /v8/management/capabilities` advertise `capabilities.topup_approval: true`. Clients should gate the approval flow on this flag; missing/false means an older deployment does not advertise this contract. Requests are persistent in `billing_recharge_request`; schema/snapshot version 9 includes pending and approved requests. Older snapshot formats remain importable and restore without recharge requests.
 
 ### GET `/billing/charges`
 

@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // ErrUserNotFound indicates that the referenced user record does not exist.
@@ -47,6 +50,7 @@ func IsUserEmailConflictError(err error) bool {
 }
 
 type UserUpdate struct {
+	ApprovalPending  *bool
 	Username         *string
 	Password         *string
 	Email            *string
@@ -153,6 +157,9 @@ func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRe
 		Username: username,
 	}
 	defaultUserPeriodLimitFields(record)
+	if update.ApprovalPending != nil {
+		record.ApprovalPending = *update.ApprovalPending
+	}
 	if update.Password != nil {
 		record.Password = *update.Password
 	}
@@ -199,6 +206,9 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
+		}
+		if update.ApprovalPending != nil {
+			record.ApprovalPending = *update.ApprovalPending
 		}
 		if update.Username != nil {
 			username := strings.TrimSpace(*update.Username)
@@ -249,6 +259,87 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 			record.Passkey = cloneJSONB(*update.Passkey)
 		}
 		return tx.Save(record).Error
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+// ErrApprovalModelGroups indicates an invalid approval model scope.
+var ErrApprovalModelGroups = errors.New("invalid approval model_groups")
+
+// ApproveUser atomically grants optional key scopes and approves a pending user.
+// A nil scope preserves the legacy approval-only behavior.
+func (r *Repository) ApproveUser(ctx context.Context, id uint, modelGroups *[]uint) (*UserRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if id == 0 {
+		return nil, fmt.Errorf("user id is required")
+	}
+	ctx = contextOrBackground(ctx)
+	record := &UserRecord{}
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Match key mutation lock ordering before taking the user row lock.
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
+		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(record, id).Error; errFirst != nil {
+			return errFirst
+		}
+		if !record.ApprovalPending {
+			return nil
+		}
+		if modelGroups != nil {
+			if len(*modelGroups) == 0 {
+				return fmt.Errorf("%w: at least one enabled model group is required", ErrApprovalModelGroups)
+			}
+			for _, groupID := range *modelGroups {
+				if groupID == 0 {
+					return fmt.Errorf("%w: ids must be positive", ErrApprovalModelGroups)
+				}
+				group := ModelGroupRecord{}
+				if errGroup := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&group, groupID).Error; errGroup != nil {
+					return errGroup
+				}
+				if group.Disabled {
+					return fmt.Errorf("%w: model group %d is disabled", ErrApprovalModelGroups, groupID)
+				}
+			}
+			groupsJSON, errGroups := apiKeyModelGroupsJSON(*modelGroups)
+			if errGroups != nil {
+				return errGroups
+			}
+			result := tx.Model(&APIKeyRecord{}).Where("user_id = ?", id).Update("model_groups", groupsJSON)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				var raw [32]byte
+				if _, errRandom := rand.Read(raw[:]); errRandom != nil {
+					return fmt.Errorf("generate approval API key: %w", errRandom)
+				}
+				key := &APIKeyRecord{
+					APIKey: "sk-" + hex.EncodeToString(raw[:]), UserID: &id,
+					Channels: emptyAPIKeyChannelsJSON(), ModelGroups: groupsJSON,
+				}
+				// Database constraint errors may include the generated secret value.
+				keyTx := tx.Session(&gorm.Session{Logger: tx.Logger.LogMode(gormlogger.Silent)})
+				if errCreate := keyTx.Create(key).Error; errCreate != nil {
+					return errors.New("create approval API key failed")
+				}
+			}
+			if errEvent := appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano()); errEvent != nil {
+				return errEvent
+			}
+		}
+		if errUpdate := tx.Model(record).Update("approval_pending", false).Error; errUpdate != nil {
+			return errUpdate
+		}
+		record.ApprovalPending = false
+		return nil
 	})
 	if errTransaction != nil {
 		return nil, errTransaction

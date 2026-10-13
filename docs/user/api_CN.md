@@ -59,7 +59,7 @@ user-email:
 | --- | --- | --- |
 | `GET` | `/capabilities` | 返回可选 User API capability。 |
 | `GET` | `/models` | 返回公开模型目录。 |
-| `POST` | `/register` | 创建用户并返回 bearer token。 |
+| `POST` | `/register` | 创建待审批用户；返回 HTTP 202，不签发 bearer token。 |
 | `POST` | `/login` | 用户未启用 passkey 和 TOTP 时的密码登录。 |
 | `POST` | `/login/totp` | 用户启用 TOTP 时的密码 + TOTP 登录。 |
 | `POST` | `/login/passkey` | Passkey 登录。 |
@@ -67,7 +67,9 @@ user-email:
 | `POST` | `/password/forgot` | 接收通用密码找回请求。 |
 | `POST` | `/password/reset` | 消费重置 token 并设置新密码。 |
 
-其他所有 `/user/*` route 都需要注册或登录成功后返回的 bearer token。
+Passkey 登录 begin/options 也属于公开接口。受保护的 `/user/*` route 需要登录成功后返回的 bearer token。
+
+公开注册的用户必须先由管理员调用 `POST /v8/management/users/:id/approve` 批准。在此之前，密码/TOTP 登录、passkey 登录 begin/finish 和 bearer session 认证（包括 `/me`）均返回 HTTP 403：`{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`。邮箱验证和密码重置不会清除待审批状态，也不会签发 session。现有用户和管理员创建的用户保持可用。
 Bearer token 是使用集群根 CA 私钥签名、并使用集群根 CA 公钥验证的 RS256 JWT。替换集群根 CA 后，之前签发的 User API token 会失效。
 Bearer token 还包含用户当前 session version。密码修改、密码重置或 Management API 管理员更新密码成功后都会递增该版本，使旧 bearer token 失效。已认证修改密码会为当前客户端返回替换 session；密码重置不会自动登录。
 密码会按照原始输入值进行 hash 和校验，不会去除首尾空白字符。新 bcrypt 密码最多为 72 个 UTF-8 字节。
@@ -104,7 +106,7 @@ Home User API 会额外写入以下响应头：
 { "status": "ok" }
 ```
 
-注册和登录成功时返回：
+登录成功时返回：
 
 ```json
 {
@@ -215,7 +217,8 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
-    "model_catalog": true
+    "model_catalog": true,
+        "request_logs": true
   },
   "server_info": {
     "home_version": "v1.2.3",
@@ -261,7 +264,15 @@ user-panel:
 | `password` | string | yes | 用于生成存储密码 hash 的明文密码。 |
 | `email` | string | no | 可选邮箱。仅在 `email_registration` 为 true 时接受；会先归一化并以未验证状态保存，验证成功前不会占用唯一所有权。 |
 
-响应：登录响应结构。提供邮箱时，Home 会先执行验证投递限流，再尝试异步排队；地址已被拥有或请求已受限时仍接受注册，但不会发送邮件。注册成功不代表邮箱已验证或已可用于找回。
+响应：HTTP **202 Accepted**，不包含 bearer token 或 session：
+
+```json
+{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
+```
+
+账户持久化为 `approval_pending: true`，注册请求不能覆盖此标志。客户端应显示提示，而不是进入已登录工作区。管理员批准后，用户可正常登录。
+
+提供邮箱时，Home 会先执行验证投递限流，再尝试异步排队；地址已被拥有或请求已受限时仍接受注册，但不会发送邮件。注册成功不代表邮箱已验证或已可用于找回。
 
 所有注册尝试（包括不带邮箱的 username-only 注册）都会按来源 IP 和全局维度限流；验证邮件投递另有目标邮箱维度限制。被限制时返回 `429 registration_rate_limited` 与 `Retry-After`。
 
@@ -911,6 +922,24 @@ Authorization: Bearer user.jwt.token
 
 ## 周期限额
 
+### POST `/period-limits/reset`
+
+完整端点：`POST /user/period-limits/reset`，需要当前用户 bearer session。**不要发送请求体或 query 参数**（包括 `{}` 也拒绝），不接受用户、窗口或模式选择器。
+
+成功请求只消费一次额度，并重置所有启用的 `5h`/`1d`/`7d`/`30d` 窗口，包括限额为零的窗口。null 限额的禁用窗口保持不变。沿用 counter 重置语义：清除启用窗口起点并更新 usage epoch，不改变限额、credits、扣费记录、余额流水或请求历史。零限额仍为零。
+
+HTTP 200：`{"status":"ok","limits": <包含 reset_allowance 的完整周期限额状态>}`。行锁、续期、带余额条件的递减、窗口重置及状态重建在同一事务内完成；任何失败均回滚。
+
+请求体/选择器返回 HTTP 400（`error: "invalid body"`）。没有启用窗口时返回 HTTP 409 `reset_allowance_no_enabled_windows`；额度未配置、过期或耗尽返回 HTTP 409 `reset_allowance_unavailable`。错误对象包含 `error` 与 `message`。认证规则不变：无效/缺失 session 返回 401；待审批用户返回 403 `approval_pending`。意外数据库错误返回 500 `period_limits_reset_failed`。
+
+管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。`GET /user/period-limits` 包含：
+
+```json
+{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
+```
+
+mode 为 one_time/monthly；未配置时为空字符串，amount/available 为零，两个时间为 null。amount/available 为非负整数。one_time 的 expires_at 为 RFC3339/null，到达过期时间后 available 为零，renews_at 为 null。monthly 的 expires_at 为 null，按用户时区（默认 Asia/Shanghai）每月一日零点补充至 amount，不结转，跳过月份不累积；renews_at 为下次月初的 RFC3339 时间。只读状态计算延迟续期，成功消费时持久化。管理员通过 `PUT /v8/management/users/:id/reset-allowance` 设置唯一策略。
+
 ### GET `/period-limits`
 
 返回当前认证用户配置的周期限额窗口及当前使用量。该路由只读，并且不会暴露其他用户的限额。
@@ -943,6 +972,63 @@ Authorization: Bearer user.jwt.token
   ]
 }
 ```
+
+## 当前用户请求日志摘要
+
+### GET `/request-logs`
+
+完整端点为 `GET /user/request-logs`。必须使用当前用户的 bearer session；缺失、无效、过期、已撤销或已删除用户的 session 返回 `401`。待审批用户返回 `403 approval_pending`。`GET /user/capabilities` 返回 `request_logs: true`，旧版本可能不包含该字段。
+
+只支持以下查询参数：
+
+| 参数 | 含义 |
+| --- | --- |
+| `from` | 可选 RFC3339 时间（支持小数秒和时区偏移），包含起点。 |
+| `to` | 可选 RFC3339 时间，不包含终点。 |
+| `request_id` | 可选，精确匹配；不支持子串、后缀、通配符或全文搜索。 |
+| `limit` | 正整数；默认 50，最大限制为 200。 |
+| `offset` | 非负整数；默认 0。 |
+
+无效时间（包括显式空值、仅日期和 Unix 秒）、起点晚于终点、非法或溢出整数、非正数 limit、负数 offset 均返回 `400`。相等的时间边界返回空结果。未知参数被忽略：`user_id`、`user`、`api_key`、key ID、`key`、`search` 和管理端过滤条件不会影响归属、匹配或计数。
+
+```json
+{
+  "items": [
+    {
+      "timestamp": "2026-06-10T01:02:03Z",
+      "event_type": "completion",
+      "status": "success",
+      "model": "gpt-4.1-mini",
+
+      "tokens": 1500,
+      "latency_ms": 123,
+      "request_id": "req-first"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "summary": {
+    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
+    "average_latency_ms": 123,
+    "status": {"success": 1, "failed": 0}
+  }
+}
+```
+
+响应 envelope 包含 `items`、`total`、`limit`、`offset` 和新增的 `summary`。SQL 聚合覆盖**分页前的全部匹配记录**，与列表和 `total` 使用完全相同的归属、`from`、`to` 和精确 `request_id` 过滤范围。`summary` 包含：
+
+- `by_model`：每个匹配模型的 `{model: string, requests: number}`，按 `requests` 降序、`model` 升序排序，不截断。
+- `average_latency_ms`：仅对正数 `latency_ms` 求数值平均；`<= 0` 表示未测量，不参与平均。没有正数测量值时返回 `null`。
+- `status`：`{success: number, failed: number}`，依据与列表状态相同的已存储 failed 标志计数。两者之和等于 `total`；失败记录仅在具有可信历史归属时纳入。
+
+没有匹配记录时返回 `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`。分页 offset 超出最后一条匹配记录时，仍返回完整过滤范围的汇总和 `total`。
+
+每项严格包含七个字段：时间（`timestamp`，UTC RFC3339）、事件（`event_type`）、状态（`status`）、模型（`model`）、Token 数（`tokens`，accounting total）、延迟（`latency_ms`）和请求 ID（`request_id`）。事件类别为 `completion`、`embedding`、`response`、`message`、`stream` 或 `unknown`，不会返回任意事件元数据。状态仅为 `success` 或 `failed`，不包含错误详情或 HTTP 状态码。按时间降序、内部 usage ID 降序排序；内部 ID 不对外返回。`total` 为按归属和过滤条件限定后、分页前的计数。空结果使用 `items: []`。
+
+归属只依据关联 usage 的历史 `billing_charge.user_id` 快照，该快照在 usage 入库并记录计费归属时捕获。列表、计数和所有 summary 聚合均要求快照匹配当前认证用户 ID。**绝不回退到 API key 当前所有者**，不信任 payload 中的用户身份，也不按当前绑定补填历史归属。重新分配或删除 key 不会转移历史日志；删除用户会使其无法访问，日志不会转移给其他用户。缺失、null 或未知归属的记录全部排除，包括没有快照的旧记录、失败请求和非计费记录。因此本接口是 fail-closed 的已归属 usage 摘要，而非完整原始请求日志归档。
+
+不会返回 provider、HTTP 状态码、客户端/key 标识、secret、路由、计费数据、原始 payload、错误详情或下载 URL。本接口不授予管理端列表、详情或文件下载权限。
 
 ## Billing
 
@@ -1015,11 +1101,30 @@ Authorization: Bearer user.jwt.token
 
 ### POST `/billing/recharge`
 
-**无限制自助增加余额：**直接给 session 用户充值，不验证支付、兑换券或管理员批准。这不是支付集成。每次成功请求都会新增充值，不支持幂等键。
+提交需要**管理员批准**的自助充值申请。提交时不修改余额，也不生成分类账；这不是支付集成。每个用户最多只能有一笔待批准申请，再次提交返回 `409 topup_pending`。
 
-请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。可选 `note` 是字符串，去除首尾空白后存入分类账。提供的 `user_id`、`operator`、`type` 无法修改目标用户或操作类型。
+请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。导致余额溢出、或过小而无法增加 float64 余额的有限金额返回 `400 invalid_amount`。`note` 去除首尾空白后存入申请，批准时复制到分类账。传入的 `user_id`、`operator`、`type` 无法改变目标用户或操作。
 
-响应：`200 { "record": BalanceRecord, "current_balance": number }`。通过 `ApplyBillingBalanceRecord` 在单个数据库事务中更新余额和写入分类账。保留现有 `credits_unlimited` 行为：记录充值但不修改数值余额。认证失败返回 `401`；数据库失败（包括最终余额溢出）返回 `500 billing_recharge_failed`，不会发生部分写入。
+响应为 HTTP **202**，余额保持不变：
+
+```json
+{
+  "request": {
+    "id": 123, "user_id": 1, "amount": 12.5, "note": "可选审计备注",
+    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
+    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
+  },
+  "current_balance": 10
+}
+```
+
+申请 ID 为数字，分类账 ID 为字符串。管理员通过 `POST /v8/management/users/:id/topup/approve` 提交明确的 `request_id` 批准申请。金额仅从数据库读取；余额、分类账、申请状态及批准时间在同一事务内更新，重复批准不会重复入账。保留 `credits_unlimited` 行为：批准时生成分类账但不修改数值余额。未认证返回 `401`，账号尚未批准返回 `403 approval_pending`；数据库错误返回 `500 billing_recharge_failed`，不会部分写入。
+
+### GET `/billing/recharge-request`
+
+仅限认证用户。返回 `200 { "request": RechargeRequest | null }`，字段同上。只读取 session 用户自己的待批准申请，忽略传入的用户 ID。批准后返回 `null`，除非已提交新申请。未认证返回 `401`（账号尚未批准为 `403 approval_pending`）；数据库错误返回 `500 billing_recharge_request_load_failed`。
+
+`GET /user/capabilities` 与 `GET /v8/management/capabilities` 均声明 `capabilities.topup_approval: true`。客户端应依此启用批准流程；字段缺失或为 false 表示旧部署未声明支持此契约。申请持久化于 `billing_recharge_request`；数据库/快照版本 9 保存待批准及已批准申请。旧版快照仍可导入，但不包含充值申请。
 
 ### GET `/billing/charges`
 

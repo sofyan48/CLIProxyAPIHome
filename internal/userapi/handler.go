@@ -112,11 +112,14 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.GET("/models/accessible", handler.ListAccessibleModels)
 
 	group.GET("/me", handler.CurrentUser)
+	group.GET("/request-logs", handler.ListCurrentUserRequestLogs)
 	group.GET("/billing/overview", handler.CurrentUserBillingOverview)
 	group.GET("/billing/charges", handler.ListCurrentUserBillingCharges)
 	group.GET("/billing/balance-records", handler.ListCurrentUserBillingBalanceRecords)
 	group.POST("/billing/recharge", handler.RechargeCurrentUserBillingBalance)
+	group.GET("/billing/recharge-request", handler.GetCurrentUserRechargeRequest)
 	group.GET("/period-limits", handler.CurrentUserPeriodLimits)
+	group.POST("/period-limits/reset", handler.ResetCurrentUserPeriodLimits)
 
 	group.POST("/password", handler.ChangePassword)
 	group.PATCH("/password", handler.ChangePassword)
@@ -216,9 +219,11 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 		respondPasswordHashError(c, errHash)
 		return
 	}
+	pending := true
 	update := cluster.UserUpdate{
-		Username: &username,
-		Password: &hashed,
+		Username:        &username,
+		Password:        &hashed,
+		ApprovalPending: &pending,
 	}
 	if email != "" {
 		update.Email = &email
@@ -241,7 +246,7 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 			}).Warn("user mail enqueue failed")
 		}
 	}
-	h.respondLogin(c, ctx, record)
+	c.JSON(http.StatusAccepted, gin.H{"approval_pending": true, "message": approvalPendingMessage})
 }
 
 // Login handles password login without TOTP verification.
@@ -313,6 +318,9 @@ func (h *Handler) LoginPasskey(c *gin.Context) {
 	record, errUser := h.repo.GetUserByUsername(ctx, username)
 	if errUser != nil {
 		respondAuthError(c, errUser)
+		return
+	}
+	if rejectPendingUser(c, record) {
 		return
 	}
 	if errLogin := h.finishPasskeyLogin(c, ctx, record, challengeID, credentialRaw); errLogin != nil {
@@ -618,6 +626,9 @@ func (h *Handler) BeginPasskeyLogin(c *gin.Context) {
 		respondAuthError(c, errUser)
 		return
 	}
+	if rejectPendingUser(c, record) {
+		return
+	}
 	assertion, challengeID, errBegin := h.beginPasskeyLogin(c, ctx, record)
 	if errBegin != nil {
 		respondError(c, http.StatusInternalServerError, "passkey_begin_failed", errBegin)
@@ -749,6 +760,9 @@ func (h *Handler) authenticatedUser(c *gin.Context, ctx context.Context, fields 
 		respondError(c, http.StatusUnauthorized, "invalid_token", fmt.Errorf("invalid token"))
 		return nil, false
 	}
+	if rejectPendingUser(c, record) {
+		return nil, false
+	}
 	return record, true
 }
 
@@ -768,7 +782,20 @@ func (h *Handler) userByPassword(c *gin.Context, ctx context.Context, fields aut
 		respondError(c, http.StatusUnauthorized, "invalid_credentials", fmt.Errorf("invalid credentials"))
 		return nil, false
 	}
+	if rejectPendingUser(c, record) {
+		return nil, false
+	}
 	return record, true
+}
+
+const approvalPendingMessage = "Your account is awaiting administrator approval."
+
+func rejectPendingUser(c *gin.Context, record *cluster.UserRecord) bool {
+	if !record.ApprovalPending {
+		return false
+	}
+	respondError(c, http.StatusForbidden, "approval_pending", errors.New(approvalPendingMessage))
+	return true
 }
 
 func (h *Handler) requirePasskeyLogin(c *gin.Context, record *cluster.UserRecord) bool {
@@ -785,6 +812,9 @@ func (h *Handler) requirePasskeyLogin(c *gin.Context, record *cluster.UserRecord
 }
 
 func (h *Handler) respondLogin(c *gin.Context, ctx context.Context, record *cluster.UserRecord) {
+	if rejectPendingUser(c, record) {
+		return
+	}
 	token, expiresAt, errToken := h.createBearerToken(ctx, record.ID, record.SessionVersion, defaultSessionTTL)
 	if errToken != nil {
 		respondError(c, http.StatusInternalServerError, "token_create_failed", errToken)

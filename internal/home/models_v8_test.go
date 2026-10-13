@@ -94,6 +94,33 @@ func TestV8ModelCapabilitiesSurviveCredentialAndDispatch(t *testing.T) {
 	}
 }
 
+func TestV8ClaudeNativeToolSearchOption(t *testing.T) {
+	synthesize := func(enabled bool) *coreauth.Auth {
+		t.Helper()
+		cfg := &config.Config{ClaudeKey: []config.ClaudeKey{{APIKey: "k", BaseURL: "https://gateway.example.com", NativeToolSearch: enabled}}}
+		auths, errSynthesize := synthesizer.NewConfigSynthesizer().Synthesize(&synthesizer.SynthesisContext{
+			Config: cfg, IDGenerator: synthesizer.NewStableIDGenerator(),
+		})
+		if errSynthesize != nil || len(auths) != 1 {
+			t.Fatalf("synthesis count=%d err=%v", len(auths), errSynthesize)
+		}
+		return auths[0]
+	}
+
+	enabled := SanitizeAuthForDownstream(synthesize(true))
+	if got := enabled.Attributes["native_tool_search"]; got != "true" {
+		t.Fatalf("native_tool_search = %q, want true", got)
+	}
+	options, ok := enabled.Metadata["credential_options"].(map[string]any)
+	if !ok || options["native-tool-search"] != true {
+		t.Fatalf("credential_options = %#v, want native-tool-search=true", enabled.Metadata["credential_options"])
+	}
+
+	if value, exists := synthesize(false).Attributes["native_tool_search"]; exists {
+		t.Fatalf("native_tool_search = %q, want absent by default", value)
+	}
+}
+
 func TestV8CredentialOptionsPreserveEmptyModels(t *testing.T) {
 	for _, models := range [][]config.CodexModel{nil, {}} {
 		cfg := &config.Config{CodexKey: []config.CodexKey{{APIKey: "test-key", BaseURL: "https://example.test", Models: models}}}

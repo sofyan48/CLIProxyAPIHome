@@ -15,6 +15,9 @@ type ClaudeConfig struct {
 	// ModelLevelCooling scopes Claude quota cooldowns to the requested model
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
+	// ToolSearch is a CPA option (upstream.claude.tool-search) that enables Codex
+	// client tool_search on Claude Responses routes. Home forwards it to CPA.
+	ToolSearch bool `yaml:"tool-search" json:"tool-search"`
 }
 
 type XAIConfig struct {

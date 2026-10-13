@@ -136,3 +136,19 @@ func TestSanitizeConfigYAMLForDownstreamNullDocumentAppliesHomeModeScalars(t *te
 		}
 	}
 }
+
+// TestSanitizeConfigYAMLForDownstreamForwardsClaudeToolSearch verifies the v8
+// upstream.claude.tool-search switch reaches CPA in the flat layout it reads.
+func TestSanitizeConfigYAMLForDownstreamForwardsClaudeToolSearch(t *testing.T) {
+	out, errSanitize := sanitizeConfigYAMLForDownstream([]byte("config-version: 8\nupstream:\n  claude:\n    model-level-cooling: true\n    tool-search: true\n"))
+	if errSanitize != nil {
+		t.Fatalf("sanitizeConfigYAMLForDownstream() error = %v", errSanitize)
+	}
+	want := "claude:\n    model-level-cooling: true\n    tool-search: true\n"
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("downstream config = %q, want %q", out, want)
+	}
+	if strings.Contains(string(out), "upstream:") {
+		t.Fatalf("downstream config kept a v8 upstream block: %q", out)
+	}
+}

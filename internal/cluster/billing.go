@@ -401,7 +401,7 @@ func (r *Repository) ApplyBillingBalanceRecord(ctx context.Context, update Billi
 	if update.UserID == 0 {
 		return nil, fmt.Errorf("user id is required")
 	}
-	if update.Amount <= 0 {
+	if update.Amount <= 0 || math.IsNaN(update.Amount) || math.IsInf(update.Amount, 0) {
 		return nil, fmt.Errorf("amount must be positive")
 	}
 	switch update.Type {
@@ -425,29 +425,41 @@ func (r *Repository) ApplyBillingBalanceRecord(ctx context.Context, update Billi
 	record := &BillingBalanceRecord{}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		delta := update.Amount
-		if update.Type == BillingBalanceTypeDeduct {
-			delta = -update.Amount
+		appliedRecord, errApply := applyBillingBalanceRecordTx(ctx, tx, update)
+		if errApply != nil {
+			return errApply
 		}
-		balanceBefore, balanceAfter, errCredits := billingApplyUserCreditDeltaTx(ctx, tx, update.UserID, delta)
-		if errCredits != nil {
-			return errCredits
-		}
-		*record = BillingBalanceRecord{
-			ID:            billingID("balance"),
-			UserID:        update.UserID,
-			Type:          update.Type,
-			Amount:        update.Amount,
-			BalanceBefore: balanceBefore,
-			BalanceAfter:  balanceAfter,
-			Operator:      update.Operator,
-			Note:          update.Note,
-			CreatedAt:     time.Now().UTC(),
-		}
-		return tx.WithContext(ctx).Create(record).Error
+		*record = *appliedRecord
+		return nil
 	})
 	if errTransaction != nil {
 		return nil, errTransaction
+	}
+	return record, nil
+}
+
+func applyBillingBalanceRecordTx(ctx context.Context, tx *gorm.DB, update BillingBalanceUpdate) (*BillingBalanceRecord, error) {
+	delta := update.Amount
+	if update.Type == BillingBalanceTypeDeduct {
+		delta = -update.Amount
+	}
+	balanceBefore, balanceAfter, errCredits := billingApplyUserCreditDeltaTx(ctx, tx, update.UserID, delta)
+	if errCredits != nil {
+		return nil, errCredits
+	}
+	record := &BillingBalanceRecord{
+		ID:            billingID("balance"),
+		UserID:        update.UserID,
+		Type:          update.Type,
+		Amount:        update.Amount,
+		BalanceBefore: balanceBefore,
+		BalanceAfter:  balanceAfter,
+		Operator:      update.Operator,
+		Note:          update.Note,
+		CreatedAt:     time.Now().UTC(),
+	}
+	if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(record).Error; errCreate != nil {
+		return nil, errCreate
 	}
 	return record, nil
 }

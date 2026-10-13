@@ -117,6 +117,7 @@ type UserPeriodLimitsStatus struct {
 	Credits          float64                  `json:"credits"`
 	CreditsUnlimited bool                     `json:"credits_unlimited"`
 	Windows          []UserPeriodWindowStatus `json:"windows"`
+	ResetAllowance   UserResetAllowanceStatus `json:"reset_allowance"`
 }
 
 // UserPeriodLimitResetResult is returned by ResetUserPeriodLimits.
@@ -686,6 +687,7 @@ func buildUserPeriodLimitsStatusDB(ctx context.Context, db *gorm.DB, user *UserR
 		return UserPeriodLimitsStatus{}, errEval
 	}
 	status := UserPeriodLimitsStatus{
+		ResetAllowance:   UserResetAllowanceStatusAt(user, now),
 		UserID:           user.ID,
 		Timezone:         user.Timezone,
 		Credits:          user.Credits,
@@ -753,27 +755,7 @@ func (r *Repository) ResetUserPeriodLimits(ctx context.Context, userID uint, win
 			target = []string{PeriodWindow5h, PeriodWindow1d, PeriodWindow7d, PeriodWindow30d}
 		}
 
-		updates := map[string]any{}
-		for _, id := range target {
-			if col := windowStartColumn(id); col != "" {
-				updates[col] = nil
-			}
-			windowMode, errMode := normalizePeriodWindowMode(userWindowMode(user, id), id != PeriodWindow5h)
-			if errMode != nil {
-				windowMode = DefaultPeriodWindowMode
-			}
-			// counter always moves usage_epoch.
-			// window_only clears first_use starts; for sliding/calendar it also moves
-			// usage_epoch so the reset actually zeroes used (starts alone are no-ops).
-			needEpoch := mode == PeriodResetModeCounter ||
-				windowMode == PeriodWindowModeSliding ||
-				windowMode == PeriodWindowModeCalendar
-			if needEpoch {
-				if col := usageEpochColumn(id); col != "" {
-					updates[col] = now
-				}
-			}
-		}
+		updates := userPeriodResetUpdates(user, target, mode, now)
 		if len(updates) > 0 {
 			if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
 				return errUpdate
