@@ -26,10 +26,11 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"capabilities": gin.H{
-			"topup_approval":     true,
-			"email_registration": enabled,
-			"email_verification": enabled,
-			"password_recovery":  enabled,
+			"user_reset_allowance": true,
+			"topup_approval":       true,
+			"email_registration":   enabled,
+			"email_verification":   enabled,
+			"password_recovery":    enabled,
 			// Advertised so a client can hide the catalog on an older Home
 			// instead of discovering the route is missing by calling it and
 			// handling a 404 as if it were an outage.

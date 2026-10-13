@@ -72,6 +72,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"users":                                true,
 			"access_groups":                        true,
 			"user_period_limits":                   true,
+			"user_reset_allowance":                 true,
 			"credential_in_flight_snapshots":       true,
 			"credential_in_flight_snapshot_cursor": true,
 			"credential_concurrency_limits_v2":     true,

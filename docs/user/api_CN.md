@@ -922,6 +922,24 @@ Authorization: Bearer user.jwt.token
 
 ## 周期限额
 
+### POST `/period-limits/reset`
+
+完整端点：`POST /user/period-limits/reset`，需要当前用户 bearer session。**不要发送请求体或 query 参数**（包括 `{}` 也拒绝），不接受用户、窗口或模式选择器。
+
+成功请求只消费一次额度，并重置所有启用的 `5h`/`1d`/`7d`/`30d` 窗口，包括限额为零的窗口。null 限额的禁用窗口保持不变。沿用 counter 重置语义：清除启用窗口起点并更新 usage epoch，不改变限额、credits、扣费记录、余额流水或请求历史。零限额仍为零。
+
+HTTP 200：`{"status":"ok","limits": <包含 reset_allowance 的完整周期限额状态>}`。行锁、续期、带余额条件的递减、窗口重置及状态重建在同一事务内完成；任何失败均回滚。
+
+请求体/选择器返回 HTTP 400（`error: "invalid body"`）。没有启用窗口时返回 HTTP 409 `reset_allowance_no_enabled_windows`；额度未配置、过期或耗尽返回 HTTP 409 `reset_allowance_unavailable`。错误对象包含 `error` 与 `message`。认证规则不变：无效/缺失 session 返回 401；待审批用户返回 403 `approval_pending`。意外数据库错误返回 500 `period_limits_reset_failed`。
+
+管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。`GET /user/period-limits` 包含：
+
+```json
+{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
+```
+
+mode 为 one_time/monthly；未配置时为空字符串，amount/available 为零，两个时间为 null。amount/available 为非负整数。one_time 的 expires_at 为 RFC3339/null，到达过期时间后 available 为零，renews_at 为 null。monthly 的 expires_at 为 null，按用户时区（默认 Asia/Shanghai）每月一日零点补充至 amount，不结转，跳过月份不累积；renews_at 为下次月初的 RFC3339 时间。只读状态计算延迟续期，成功消费时持久化。管理员通过 `PUT /v8/management/users/:id/reset-allowance` 设置唯一策略。
+
 ### GET `/period-limits`
 
 返回当前认证用户配置的周期限额窗口及当前使用量。该路由只读，并且不会暴露其他用户的限额。

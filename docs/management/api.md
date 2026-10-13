@@ -252,6 +252,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
+| `PUT` | `/users/:id/reset-allowance` |
 | `GET` | `/users/:id/period-limits` |
 | `POST` | `/users/:id/period-limits/reset` |
 
@@ -1145,6 +1146,28 @@ Validation failures use the same `field_errors` contract as `POST /users`.
 
 Response: same shape as `GET /users/:id`.
 
+
+### PUT `/users/:id/reset-allowance`
+
+Full endpoint: `PUT /v8/management/users/:id/reset-allowance`. Requires Management API authentication.
+
+```json
+{"mode":"one_time","amount":2,"expires_at":null}
+```
+
+`mode` is required and must be `one_time` or `monthly`; `amount` is required and must be a non-negative signed 64-bit integer. `expires_at` is an optional RFC3339 timestamp or null (omitted means null); non-null expiry is rejected for monthly policies. Every successful PUT replaces the single policy and immediately initializes the persisted balance to `amount`; it never resets windows or modifies credits/history. Amount zero disables consumption.
+
+HTTP 200 returns `{"user": <management user map>}`. User maps (including list/detail) and period-limit status include `reset_allowance`:
+
+```json
+{"mode":"monthly","amount":2,"available":2,"expires_at":null,"renews_at":"2026-11-01T00:00:00Z"}
+```
+
+`available` is the effective remaining balance. One-time policies have null `renews_at` and become unavailable at or after `expires_at`. Monthly policies have null `expires_at` and replenish to `amount` at midnight on the first of each calendar month in the user timezone (default `Asia/Shanghai`), with no carry, including skipped months. Reads calculate renewal without writes; consumption persists it transactionally. Timestamps are RFC3339; unconfigured users return `{"mode":"","amount":0,"available":0,"expires_at":null,"renews_at":null}`.
+
+Invalid bodies/policies return HTTP 400; missing users return 404. Policy validation uses `field_errors` codes `invalid_reset_allowance_mode`, `invalid_reset_allowance_amount`, or `invalid_reset_allowance_expiry`. Both Management and User capability manifests advertise `capabilities.user_reset_allowance: true`.
+
+The existing admin `POST /users/:id/period-limits/reset` retains selectors/modes and does not consume this allowance.
 
 ### GET `/users/:id/period-limits`
 

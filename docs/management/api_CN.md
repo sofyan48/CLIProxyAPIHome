@@ -252,6 +252,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
+| `PUT` | `/users/:id/reset-allowance` |
 | `GET` | `/users/:id/period-limits` |
 | `POST` | `/users/:id/period-limits/reset` |
 
@@ -1144,6 +1145,28 @@ JSON 语法错误，或请求体无法解析到足以可靠定位具体字段时
 
 输出：与 `GET /users/:id` 相同。
 
+
+### PUT `/users/:id/reset-allowance`
+
+完整端点：`PUT /v8/management/users/:id/reset-allowance`，需要 Management API 认证。
+
+```json
+{"mode":"one_time","amount":2,"expires_at":null}
+```
+
+`mode` 必填，只接受 `one_time` 或 `monthly`；`amount` 必填，为非负有符号 64 位整数。`expires_at` 可省略（等同 null），或为 RFC3339 时间/null；monthly 不允许非 null 过期时间。每次成功设置均替换唯一策略，并立即将数据库余额初始化为 `amount`，不重置窗口，不改变 credits 或历史。amount 为零时无法消费。
+
+HTTP 200 返回 `{"user": <管理用户对象>}`。用户列表/详情对象及周期限额状态包含 `reset_allowance`：
+
+```json
+{"mode":"monthly","amount":2,"available":2,"expires_at":null,"renews_at":"2026-11-01T00:00:00Z"}
+```
+
+`available` 为当前有效余额。one_time 的 `renews_at` 为 null，到达或超过 `expires_at` 后不可消费。monthly 的 `expires_at` 为 null，按用户时区（默认 `Asia/Shanghai`）每月一日零点补充至 amount，不结转，跳过多个月也只补充一次。读取只计算有效状态；消费时在事务内持久化续期。时间为 RFC3339。未配置时返回 `{"mode":"","amount":0,"available":0,"expires_at":null,"renews_at":null}`。
+
+无效请求/策略返回 HTTP 400；用户不存在返回 404。策略校验的 `field_errors` code 为 `invalid_reset_allowance_mode`、`invalid_reset_allowance_amount` 或 `invalid_reset_allowance_expiry`。管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。
+
+原有管理员 `POST /users/:id/period-limits/reset` 保留窗口选择及模式行为，不消费此额度。
 
 ### GET `/users/:id/period-limits`
 

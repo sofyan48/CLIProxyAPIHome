@@ -327,6 +327,38 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	respondOK(c)
 }
 
+// SetUserResetAllowance replaces the user's single reset policy.
+func (h *Handler) SetUserResetAllowance(c *gin.Context) {
+	id, ok := userIDFromParam(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Mode      string     `json:"mode"`
+		Amount    *int64     `json:"amount"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	}
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errBind)
+		return
+	}
+	if body.Amount == nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errors.New("amount is required and must be a non-negative integer"))
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	user, errSet := h.repo.SetUserResetAllowance(ctx, id, body.Mode, *body.Amount, body.ExpiresAt, time.Now().UTC())
+	if errSet != nil {
+		if respondUserPeriodLimitValidationError(c, errSet) {
+			return
+		}
+		respondUserRecordError(c, "user_reset_allowance_set_failed", errSet)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": userRecordToMap(user)})
+}
+
 // GetUserPeriodLimits returns period-limit configuration and current usage.
 func (h *Handler) GetUserPeriodLimits(c *gin.Context) {
 	id, ok := userIDFromParam(c)
@@ -604,6 +636,7 @@ func userRecordToMap(record *cluster.UserRecord) gin.H {
 		"credits":                 record.Credits,
 		"credits_unlimited":       record.CreditsUnlimited,
 		"timezone":                timezone,
+		"reset_allowance":         cluster.UserResetAllowanceStatusAt(record, time.Now().UTC()),
 		"limit_5h_credits":        record.Limit5hCredits,
 		"window_mode_5h":          windowMode5h,
 		"limit_1d_credits":        record.Limit1dCredits,

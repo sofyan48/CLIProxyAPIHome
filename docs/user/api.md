@@ -928,6 +928,24 @@ When `status` is `insufficient_data`, no rate, latency, or throughput is publish
 
 ## Period Limits
 
+### POST `/period-limits/reset`
+
+Full endpoint: `POST /user/period-limits/reset`. Requires the current user bearer session. Send **no body and no query parameters** (even `{}` is rejected). No user/window/mode selectors are accepted.
+
+One successful request consumes exactly one allowance and resets ALL enabled `5h`/`1d`/`7d`/`30d` windows, including limits of zero. Disabled (null-limit) windows are untouched. It clears enabled window starts and advances usage epochs using the existing counter-reset semantics. Limits, credits, billing charges, balance records and request history are unchanged; a zero limit remains zero.
+
+HTTP 200 response: `{"status":"ok","limits": <complete period-limit status including reset_allowance>}`. Status is rebuilt inside the same transaction as row locking, renewal, guarded decrement and window reset. Any failure rolls back all changes.
+
+HTTP 400 (`error: "invalid body"`) rejects bodies/selectors. HTTP 409 returns `error: "reset_allowance_no_enabled_windows"` when no window is enabled, or `error: "reset_allowance_unavailable"` for unconfigured, expired or exhausted allowance. Error responses contain `error` and `message`. Existing session rules apply: 401 for invalid/missing sessions; 403 `approval_pending` for pending users. Unexpected database failures return 500 `period_limits_reset_failed`.
+
+Both capability manifests advertise `capabilities.user_reset_allowance: true`. `GET /user/period-limits` includes the object:
+
+```json
+{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
+```
+
+`mode` is `one_time`, `monthly`, or empty when unconfigured; amount/available are non-negative integers. Unconfigured status has empty mode, zero amount/available and null timestamps. One-time expiry is RFC3339/null and makes available zero at or after expiry; renews_at is null. Monthly expires_at is null; renews_at is the next first-of-month midnight in the user timezone (default `Asia/Shanghai`), serialized as RFC3339. Each month replenishes to amount without carry, even after skipped months. Read-only status reflects lazy renewal; successful consumption persists renewal. Administrators configure the policy through `PUT /v8/management/users/:id/reset-allowance`.
+
 ### GET `/period-limits`
 
 Returns the authenticated user's configured period-limit windows and current usage. This route is read-only and never exposes another user's limits.
