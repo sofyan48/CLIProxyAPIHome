@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,16 +28,23 @@ type AppLogQuery struct {
 	ClientIP  string
 	RequestID string
 	Level     string
+	Search    string
 	After     *time.Time
 	Before    *time.Time
+	AnchorID  uint
+	BeforeID  uint
+	AfterID   uint
 	Limit     int
 	Offset    int
 }
 
 type AppLogQueryResult struct {
-	Records []AppLogRecord
-	Total   int64
+	Records  []AppLogRecord
+	Total    int64
+	AnchorID uint
 }
+
+var ErrAppLogCursorNotFound = errors.New("app log cursor no longer exists; refresh the log list")
 
 // TableName returns the database table name.
 func (AppLogRecord) TableName() string {
@@ -113,7 +121,39 @@ func (r *Repository) ListAppLogs(ctx context.Context, opts AppLogQuery) (AppLogQ
 		return AppLogQueryResult{}, errDB
 	}
 
-	query := appLogQuery(db.WithContext(contextOrBackground(ctx)).Model(&AppLogRecord{}), opts)
+	tx := readOnlyRepeatableReadTransaction(ctx, db)
+	if tx.Error != nil {
+		return AppLogQueryResult{}, tx.Error
+	}
+	result, errList := listAppLogsTx(tx, opts)
+	if errList != nil {
+		if errRollback := tx.Rollback().Error; errRollback != nil {
+			return AppLogQueryResult{}, fmt.Errorf("list app logs: %w; rollback: %v", errList, errRollback)
+		}
+		return AppLogQueryResult{}, errList
+	}
+	if errCommit := tx.Commit().Error; errCommit != nil {
+		return AppLogQueryResult{}, errCommit
+	}
+	return result, nil
+}
+
+func listAppLogsTx(db *gorm.DB, opts AppLogQuery) (AppLogQueryResult, error) {
+	anchorID := opts.AnchorID
+	if anchorID == 0 {
+		// Ingestion order is independent of the timestamps supplied by CPA nodes.
+		if errAnchor := db.Model(&AppLogRecord{}).Select("COALESCE(MAX(id), 0)").Scan(&anchorID).Error; errAnchor != nil {
+			return AppLogQueryResult{}, errAnchor
+		}
+	}
+	query, errQuery := appLogQuery(db, opts)
+	if errQuery != nil {
+		return AppLogQueryResult{}, errQuery
+	}
+	// An implicit ceiling is already enforced by this transaction's read snapshot.
+	if opts.AnchorID > 0 {
+		query = query.Where("id <= ?", anchorID)
+	}
 
 	var total int64
 	if errCount := query.Count(&total).Error; errCount != nil {
@@ -131,10 +171,25 @@ func (r *Repository) ListAppLogs(ctx context.Context, opts AppLogQuery) (AppLogQ
 	if errFind := query.Order("timestamp DESC, id DESC").Find(&records).Error; errFind != nil {
 		return AppLogQueryResult{}, errFind
 	}
-	return AppLogQueryResult{Records: records, Total: total}, nil
+	return AppLogQueryResult{Records: records, Total: total, AnchorID: anchorID}, nil
 }
 
-func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
+func resolveAppLogCursor(db *gorm.DB, id uint) (time.Time, error) {
+	var cursor struct {
+		ID        uint
+		Timestamp time.Time
+	}
+	if errScan := db.Model(&AppLogRecord{}).Select("id, timestamp").Where("id = ?", id).Limit(1).Scan(&cursor).Error; errScan != nil {
+		return time.Time{}, errScan
+	}
+	if cursor.ID == 0 {
+		return time.Time{}, ErrAppLogCursorNotFound
+	}
+	return cursor.Timestamp, nil
+}
+
+func appLogQuery(db *gorm.DB, opts AppLogQuery) (*gorm.DB, error) {
+	query := db.Model(&AppLogRecord{})
 	homeIP := strings.TrimSpace(opts.HomeIP)
 	if homeIP != "" {
 		query = query.Where("home_ip = ?", homeIP)
@@ -156,13 +211,32 @@ func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	if level != "" {
 		query = query.Where("level = ?", normalizeAppLogLevel(level))
 	}
+	search := strings.TrimSpace(opts.Search)
+	if search != "" {
+		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(search)) + "%"
+		query = query.Where("LOWER(line) LIKE ? ESCAPE '!'", pattern)
+	}
 	if opts.After != nil {
 		query = query.Where("timestamp > ?", opts.After.UTC())
 	}
 	if opts.Before != nil {
 		query = query.Where("timestamp < ?", opts.Before.UTC())
 	}
-	return query
+	if opts.BeforeID > 0 {
+		ts, errCursor := resolveAppLogCursor(db, opts.BeforeID)
+		if errCursor != nil {
+			return nil, fmt.Errorf("before_id: %w", errCursor)
+		}
+		query = query.Where("(timestamp < ? OR (timestamp = ? AND id < ?))", ts, ts, opts.BeforeID)
+	}
+	if opts.AfterID > 0 {
+		ts, errCursor := resolveAppLogCursor(db, opts.AfterID)
+		if errCursor != nil {
+			return nil, fmt.Errorf("after_id: %w", errCursor)
+		}
+		query = query.Where("(timestamp > ? OR (timestamp = ? AND id > ?))", ts, ts, opts.AfterID)
+	}
+	return query, nil
 }
 
 func appLogTimestampFromPayload(payload string, fallback time.Time) time.Time {

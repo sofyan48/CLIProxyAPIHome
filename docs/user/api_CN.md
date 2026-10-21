@@ -1128,6 +1128,8 @@ Authorization: Bearer user.jwt.token
 
 ### GET `/billing/charges`
 
+扣款查询的 `input_tokens` 与 `output_tokens` 使用读取时归一化的展示口径：关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时，输入包含未缓存输入、缓存读取与缓存写入，输出包含普通输出与推理 Token；尚未回填、非完整或缺失 usage 的记录保留扣款快照原值。此转换不改写数据库，不改变扣款金额、价格快照、余额或价格档位选择。
+
 列出当前认证用户的扣费记录。
 
 请求头：

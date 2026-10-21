@@ -80,6 +80,167 @@ func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
 	}
 }
 
+func TestGetLogsSearchFiltersLineContentAndEchoesSearch(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	records := []cluster.AppLogRecord{
+		{Timestamp: now.Add(-time.Minute), ClientIP: "10.0.0.6", RequestID: "req-other", HomeIP: "192.0.2.10", Level: "info", Line: "routine poll finished", CreatedAt: now.Add(-time.Minute)},
+		{Timestamp: now, ClientIP: "10.0.0.5", RequestID: "req-wanted", HomeIP: "192.0.2.10", Level: "warn", Line: "Upstream TIMEOUT exceeded", CreatedAt: now},
+	}
+	if errCreate := db.Create(&records).Error; errCreate != nil {
+		t.Fatalf("create logs: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/logs", handler.GetLogs)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/logs?search=timeout%25&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Logs []struct {
+			Line string `json:"line"`
+		} `json:"logs"`
+		Total  int64  `json:"total"`
+		Search string `json:"search"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.Total != 0 || len(body.Logs) != 0 {
+		t.Fatalf("escaped wildcard search total=%d len=%d, want 0", body.Total, len(body.Logs))
+	}
+
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/logs?search=timeout&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.Total != 1 || len(body.Logs) != 1 || body.Logs[0].Line != "Upstream TIMEOUT exceeded" {
+		t.Fatalf("search total=%d logs=%+v, want the timeout line only", body.Total, body.Logs)
+	}
+	if body.Search != "timeout" {
+		t.Fatalf("search echo = %q, want %q", body.Search, "timeout")
+	}
+}
+
+func TestGetLogsCursorPaginationPreventsDrift(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	base := time.Date(2026, 5, 29, 1, 2, 0, 0, time.UTC)
+	records := []cluster.AppLogRecord{
+		{Timestamp: base.Add(1 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-1", HomeIP: "192.0.2.10", Level: "info", Line: "line-1", CreatedAt: base.Add(1 * time.Second)},
+		{Timestamp: base.Add(2 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-2", HomeIP: "192.0.2.10", Level: "info", Line: "line-2", CreatedAt: base.Add(2 * time.Second)},
+		{Timestamp: base.Add(3 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-3", HomeIP: "192.0.2.10", Level: "info", Line: "line-3", CreatedAt: base.Add(3 * time.Second)},
+		{Timestamp: base.Add(4 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-4", HomeIP: "192.0.2.10", Level: "info", Line: "line-4", CreatedAt: base.Add(4 * time.Second)},
+	}
+	if errCreate := db.Create(&records).Error; errCreate != nil {
+		t.Fatalf("create logs: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/logs", handler.GetLogsV8)
+
+	type logResponse struct {
+		Logs []struct {
+			ID   uint   `json:"id"`
+			Line string `json:"line"`
+		} `json:"logs"`
+		Total    int64 `json:"total"`
+		AnchorID uint  `json:"anchor_id"`
+		BeforeID uint  `json:"before_id"`
+		AfterID  uint  `json:"after_id"`
+	}
+
+	// Page 1: latest 2 records (line-4, line-3)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/logs?limit=2&offset=0", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("page 1 status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var page1 logResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &page1); err != nil {
+		t.Fatalf("decode page 1: %v", err)
+	}
+	if page1.AnchorID != records[3].ID || len(page1.Logs) != 2 || page1.Logs[0].Line != "line-4" || page1.Logs[1].Line != "line-3" {
+		t.Fatalf("unexpected page 1: %+v", page1)
+	}
+
+	// Simulate 2 new logs arriving while user is reading Page 1.
+	newRecords := []cluster.AppLogRecord{
+		{Timestamp: base.Add(5 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-5", HomeIP: "192.0.2.10", Level: "info", Line: "line-5", CreatedAt: base.Add(5 * time.Second)},
+		{Timestamp: base.Add(6 * time.Second), ClientIP: "10.0.0.5", RequestID: "req-6", HomeIP: "192.0.2.10", Level: "info", Line: "line-6", CreatedAt: base.Add(6 * time.Second)},
+	}
+	if errCreate := db.Create(&newRecords).Error; errCreate != nil {
+		t.Fatalf("create new logs: %v", errCreate)
+	}
+
+	// Page 2 with anchor_id locked to page1.AnchorID returns (line-2, line-1) without drifting to (line-4, line-3).
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/logs?limit=2&offset=2&anchor_id=%d", page1.AnchorID), nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("page 2 status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var page2 logResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &page2); err != nil {
+		t.Fatalf("decode page 2: %v", err)
+	}
+	if page2.Total != 4 || len(page2.Logs) != 2 || page2.Logs[0].Line != "line-2" || page2.Logs[1].Line != "line-1" {
+		t.Fatalf("unexpected page 2 with anchor_id: %+v", page2)
+	}
+
+	// Upward scroll with before_id = line-3's ID also returns (line-2, line-1).
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/logs?limit=2&before_id=%d", records[2].ID), nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("before_id status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var older logResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &older); err != nil {
+		t.Fatalf("decode older: %v", err)
+	}
+	if older.BeforeID != records[2].ID || len(older.Logs) != 2 || older.Logs[0].Line != "line-2" || older.Logs[1].Line != "line-1" {
+		t.Fatalf("unexpected before_id response: %+v", older)
+	}
+
+	// Tail incremental with after_id = line-4's ID returns only (line-6, line-5).
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/logs?limit=10&after_id=%d", records[3].ID), nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("after_id status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var newer logResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &newer); err != nil {
+		t.Fatalf("decode newer: %v", err)
+	}
+	if newer.AfterID != records[3].ID || len(newer.Logs) != 2 || newer.Logs[0].Line != "line-6" || newer.Logs[1].Line != "line-5" {
+		t.Fatalf("unexpected after_id response: %+v", newer)
+	}
+}
+
 func TestDeleteLogsClearsDatabaseAppLogs(t *testing.T) {
 	t.Parallel()
 

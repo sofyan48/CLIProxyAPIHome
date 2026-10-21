@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	codexBuiltinImageModelID        = "gpt-image-2"
-	xaiBuiltinImageModelID          = "grok-imagine-image"
-	xaiBuiltinImageQualityModelID   = "grok-imagine-image-quality"
-	xaiBuiltinVideoModelID          = "grok-imagine-video"
-	xaiBuiltinVideo15PreviewModelID = "grok-imagine-video-1.5-preview"
+	codexBuiltinImageModelID           = "gpt-image-2"
+	codexBuiltinImage25FlareModelID    = "gpt-image-2.5-flare"
+	codexBuiltinImage25SunburstModelID = "gpt-image-2.5-sunburst"
+	codexBuiltinImage25ModelID         = "gpt-image-2.5"
+	xaiBuiltinImageModelID             = "grok-imagine-image"
+	xaiBuiltinImageQualityModelID      = "grok-imagine-image-quality"
+	xaiBuiltinVideoModelID             = "grok-imagine-video"
+	xaiBuiltinVideo15PreviewModelID    = "grok-imagine-video-1.5-preview"
 )
 
 // staticModelsJSON mirrors the top-level structure of models.json.
@@ -48,22 +51,22 @@ func GetGeminiVertexModels() []*ModelInfo {
 
 // GetCodexFreeModels returns model definitions for the Codex free plan tier.
 func GetCodexFreeModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexFree))
+	return upsertModelInfos(cloneModelInfos(getModels().CodexFree), WithCodexBuiltins(nil)...)
 }
 
 // GetCodexTeamModels returns model definitions for the Codex team plan tier.
 func GetCodexTeamModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam))
+	return upsertModelInfos(cloneModelInfos(getModels().CodexTeam), WithCodexBuiltins(nil)...)
 }
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+	return upsertModelInfos(cloneModelInfos(getModels().CodexPlus), WithCodexBuiltins(nil)...)
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+	return upsertModelInfos(cloneModelInfos(getModels().CodexPro), WithCodexBuiltins(nil)...)
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
@@ -181,11 +184,25 @@ func withStaticModelProviders(models []*ModelInfo, providers ...string) []*Model
 	return models
 }
 
-// WithCodexBuiltins injects hard-coded Codex-only model definitions that should
-// not depend on remote models.json updates. Built-ins replace any matching IDs
-// already present in the provided slice.
+// WithCodexBuiltins fills missing Codex built-ins without replacing configured models.
+// Static catalog getters separately give built-ins precedence over remote definitions.
 func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models, codexBuiltinImageModelInfo())
+	return upsertModelInfos([]*ModelInfo{
+		codexBuiltinImageModelInfo(codexBuiltinImageModelID, "GPT Image 2"),
+		codexBuiltinImageModelInfo(codexBuiltinImage25FlareModelID, "GPT Image 2.5 Flare"),
+		codexBuiltinImageModelInfo(codexBuiltinImage25SunburstModelID, "GPT Image 2.5 Sunburst"),
+		codexBuiltinImageModelInfo(codexBuiltinImage25ModelID, "GPT Image 2.5"),
+	}, models...)
+}
+
+// IsCodexBuiltinModelID reports whether id names a hard-coded Codex built-in model.
+func IsCodexBuiltinModelID(id string) bool {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case codexBuiltinImageModelID, codexBuiltinImage25FlareModelID, codexBuiltinImage25SunburstModelID, codexBuiltinImage25ModelID:
+		return true
+	default:
+		return false
+	}
 }
 
 // WithXAIBuiltins injects hard-coded xAI image/video model definitions that should
@@ -194,16 +211,16 @@ func WithXAIBuiltins(models []*ModelInfo) []*ModelInfo {
 	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo(), xaiBuiltinVideoModelInfo(), xaiBuiltinVideo15PreviewModelInfo())
 }
 
-// codexBuiltinImageModelInfo handles a codex builtin image model info.
-func codexBuiltinImageModelInfo() *ModelInfo {
+// codexBuiltinImageModelInfo returns a built-in Codex image model definition.
+func codexBuiltinImageModelInfo(id, displayName string) *ModelInfo {
 	return &ModelInfo{
-		ID:          codexBuiltinImageModelID,
+		ID:          id,
 		Object:      "model",
 		Created:     1704067200, // 2024-01-01
 		OwnedBy:     "openai",
 		Type:        "openai",
-		DisplayName: "GPT Image 2",
-		Version:     codexBuiltinImageModelID,
+		DisplayName: displayName,
+		Version:     id,
 	}
 }
 
@@ -398,10 +415,8 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Kimi,
 		data.Antigravity,
 		data.XAI,
-		data.Devin,
-		staticDevinModels,
-		data.Meta,
-		staticMetaModels,
+		GetDevinModels(),
+		GetMetaModels(),
 	}
 	for _, models := range allModels {
 		for _, m := range models {

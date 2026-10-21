@@ -16,6 +16,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
@@ -788,7 +789,7 @@ func credentialModelPairs(auth *coreauth.Auth) []credentialAPIKeyModelPair {
 
 // isNonUserCodexBuiltin reports whether a non-user Codex built-in should be hidden.
 func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
-	if !strings.EqualFold(alias, "gpt-image-2") {
+	if !registry.IsCodexBuiltinModelID(alias) {
 		return false
 	}
 	if userDefined, ok := modelMap["user_defined"]; ok {

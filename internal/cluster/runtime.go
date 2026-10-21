@@ -283,6 +283,14 @@ func (a *RuntimeAdapter) AllowedDispatchIDsForAPIKeyModel(ctx context.Context, a
 	return a.repo.AllowedDispatchIDsForAPIKeyModel(ctx, apiKey, modelID)
 }
 
+// ModelAccessForAPIKey loads the credential/model policy used by model listings.
+func (a *RuntimeAdapter) ModelAccessForAPIKey(ctx context.Context, apiKey string) (*coreauth.ModelAccess, error) {
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.ModelAccessForAPIKey(ctx, apiKey)
+}
+
 // AllowedModelIDsForAPIKey returns model IDs allowed by API-key model group bindings.
 func (a *RuntimeAdapter) AllowedModelIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
 	if !a.Enabled() {
@@ -785,6 +793,7 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 		Status:                item.Status,
 		Disabled:              item.Disabled,
 		Unavailable:           item.Unavailable,
+		RuntimeProjection:     true,
 		RuntimeRefreshBlocked: item.RefreshBlocked,
 		NextRetryAfter:        item.NextRetryAfter,
 		Quota:                 item.Quota,

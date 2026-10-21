@@ -157,6 +157,10 @@ func autoMigratePostgresContext(ctx context.Context, db *gorm.DB, runWhenCurrent
 		runWhenCurrent,
 		postgresSchemaMigrationOperations(db, startedAt, ctx, func(lockedCtx context.Context, tx *gorm.DB, _ int64, requiredVersion int64) error {
 			lockedDB := tx.WithContext(lockedCtx)
+			// Acquire the binding lock before schema/row locks to match live API key writes.
+			if errLock := lockAPIKeyMutationTransaction(lockedDB); errLock != nil {
+				return errLock
+			}
 			if errSchema := autoMigrateSchema(lockedDB); errSchema != nil {
 				return errSchema
 			}
@@ -247,6 +251,8 @@ func runCustomMigrations(db *gorm.DB) error {
 		{name: "migrate_usage_provider_api_key_sources", run: migrateUsageProviderAPIKeySources},
 		{name: "migrate_usage_service_tiers", run: migrateUsageServiceTiers},
 		{name: "migrate_legacy_api_keys", run: migrateLegacyAPIKeys},
+		{name: "migrate_deleted_access_group_bindings", run: migrateDeletedAccessGroupBindings},
+		{name: "migrate_oauth_excluded_models_attributes", run: migrateOAuthExcludedModelsAttributes},
 	}
 	for _, migration := range migrations {
 		stageStartedAt := time.Now()
@@ -417,6 +423,8 @@ func migrateUsageObservabilityIndexes(db *gorm.DB) error {
 		return fmt.Errorf("database connection is nil")
 	}
 	statements := []string{
+		// Match the literal schema-version predicate used by pending-row queries.
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_usage_token_accounting_pending_v2 ON "usage" ("id") WHERE "token_accounting_version" <> %d`, UsageTokenAccountingSchemaVersion),
 		`CREATE INDEX IF NOT EXISTS idx_usage_provider_lower_time ON "usage" (LOWER("provider"), "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_auth_type_normalized_time ON "usage" (LOWER(REPLACE("auth_type", '-', '_')), "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_event_type_time ON "usage" ("event_type", "timestamp" DESC)`,

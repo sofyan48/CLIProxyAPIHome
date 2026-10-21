@@ -684,6 +684,26 @@ func TestAutoMigratePostgresSchemaVersionGate(t *testing.T) {
 	}
 	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
 
+	// Simulate an existing v7 database: the new indexes must be installed by the version gate.
+	for _, indexName := range []string{"idx_usage_token_accounting_pending_v2", "idx_billing_charge_time_order"} {
+		if errDrop := db.Exec("DROP INDEX " + indexName).Error; errDrop != nil {
+			t.Fatalf("drop new dashboard index %s: %v", indexName, errDrop)
+		}
+	}
+	if errUpdate := db.Model(&schemaMigrationRecord{}).Where("id = ?", schemaMigrationRecordID).Update("version", 7).Error; errUpdate != nil {
+		t.Fatalf("set prior postgres schema version: %v", errUpdate)
+	}
+	if errMigrate := AutoMigrateContext(ctx, db); errMigrate != nil {
+		t.Fatalf("upgrade postgres dashboard indexes from v7: %v", errMigrate)
+	}
+	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
+	if !db.Migrator().HasIndex(&UsageRecord{}, "idx_usage_token_accounting_pending_v2") {
+		t.Fatal("postgres upgrade did not create the pending token-accounting index")
+	}
+	if !db.Migrator().HasIndex(&BillingChargeRecord{}, "idx_billing_charge_time_order") {
+		t.Fatal("postgres upgrade did not create the billing time index")
+	}
+
 	releaseLock, lockDone := holdPostgresSchemaMigrationLock(t, db)
 	fastCtx, cancelFast := context.WithTimeout(context.Background(), time.Second)
 	errFast := AutoMigrateContext(fastCtx, db)

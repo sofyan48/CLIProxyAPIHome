@@ -64,3 +64,4 @@ go build -o test-output ./cmd/home && rm test-output # Verify compile after Go c
 - Avoid panics in HTTP handlers; prefer logged errors and meaningful HTTP status codes.
 - Keep network timeout behavior consistent with the existing runtime. Do not add broad upstream timeouts after an upstream connection is established unless the existing code path already has an intentional exception.
 - Avoid wall-clock `time.Sleep` in TTL, expiration, ordering, or cache-eviction unit tests due to platform timer granularity (e.g. Windows default timer resolution of ~15.6ms) and CI jitter under load; prefer controllable clocks (`nowFunc` / mock clock), explicit timestamp manipulation, or deterministic synchronization primitives.
+- Endpoints under the `/v0/management` base URL are deprecated and no longer maintained. For any feature changes, do not modify endpoints under `/v0/management` unless necessary to fix compilation errors.

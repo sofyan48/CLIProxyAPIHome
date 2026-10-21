@@ -6,6 +6,57 @@ Home 是一个为 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) �
 
 它作为在大规模 CLIProxyAPI 集群部署中管理和调度 API 凭证的中心枢纽。CLIProxyAPI 节点与 Home 通信以获取必要的 API 凭证并上报使用统计数据。
 
+## Home 与 Home Management Center（HMC）的关系
+
+Home 提供后端服务，[Home Management Center（HMC）](https://github.com/router-for-me/Home-Management-Center) 为 Home 提供可视化 Web 界面。**两个开源项目独立维护，HMC 页面内嵌于 Home 的正式发行版中，统一部署和更新。**
+
+### 部署正式发行版
+
+Home 官方二进制和 Docker 镜像已包含 Web 界面，无需单独部署 HMC。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/management.html`，用户入口为 `/user.html`。
+
+管理员登录需要管理密钥，配置方法见[认证说明](docs/management/api_CN.md)。数据库配置与配置导入方式见下文[集群模式](#集群模式)。更新 Web 界面时，升级 Home 二进制或 Docker 镜像即可。
+
+### 本地同时开发两个项目
+
+开发前端时，将两个仓库克隆到同一父目录下，分别在两个终端中运行 Home 和 HMC。环境要求见 Home 的 [go.mod](go.mod) 和 [HMC 开发说明](https://github.com/router-for-me/Home-Management-Center#readme)。
+
+首次在本地搭建且没有 `cluster.yaml` 时，将 Home 的 `config.example.yaml` 复制为 `config.yaml`，填写非空的 `management.secret-key`。先将配置导入本地 SQLite 数据库，再在一个终端中启动 Home：
+
+```bash
+cd CLIProxyAPIHome
+go run ./cmd/home -config config.yaml -import
+go run ./cmd/home -addr 127.0.0.1:8327
+```
+
+已有配置好的 Home 后端时，可以直接使用。
+
+在另一个终端中启动 HMC：
+
+```bash
+cd Home-Management-Center
+bun install --frozen-lockfile
+bun run dev
+```
+
+打开 `http://localhost:3000/management.html`，将管理端点填写为 `http://127.0.0.1:8327`，使用管理密钥登录。修改前端后即可预览，无需重新编译 Home。
+
+### 前端内嵌构建与发布流程
+
+从源码构建包含 Web 界面的 Home 时，需要先构建 HMC，将完整产物复制到 Home 后再编译。从两个仓库的共同父目录开始执行：
+
+```bash
+cd Home-Management-Center
+bun install --frozen-lockfile
+bun run build:embedded
+cp -R dist/. ../CLIProxyAPIHome/internal/managementasset/static/
+cd ../CLIProxyAPIHome
+go build -o CLIProxyAPIHome ./cmd/home
+```
+
+Home 源码仓库不包含生成后的前端产物，`go build` 和 `docker build` 也不会自动构建 HMC。因此，无论构建二进制还是 Docker 镜像，都需要先准备好完整的前端产物。
+
+正式发布会自动完成上述过程：推送版本标签后，发布流程先构建前端，再打包 Home，生成并发布包含 Web 界面的二进制或 Docker 镜像。具体见[二进制发布工作流](.github/workflows/release.yaml)和 [Docker 工作流](.github/workflows/docker-image.yml)。
+
 ## 核心特性
 
 - **可扩展的节点管理**：支持连接无限数量的 CLIProxyAPI 节点进行凭证分发，非常适合大规模部署。
@@ -66,7 +117,12 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 ## 贡献
 
-欢迎贡献！请随时提交 Pull Request。
+欢迎提交问题、功能建议和 Pull Request，请根据涉及的组件选择对应仓库：
+
+- **前端 / Web UI**：页面显示、交互等问题请提交到 [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues)，前端代码修改提交至 HMC 仓库。
+- **Home 后端**：服务运行、凭证调度、数据管理等问题请提交到 [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues)，后端代码修改提交至本仓库。
+
+同时涉及两个项目的改动，请关联对应的 Issue 或 Pull Request；接口变更还需同步更新相关的 [Management API](docs/management/api_CN.md) 或 [User API](docs/user/api_CN.md) 文档。
 
 1. Fork 仓库
 2. 创建您的功能分支（`git checkout -b feature/amazing-feature`）

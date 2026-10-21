@@ -229,6 +229,7 @@ func (r *Runtime) tryRegisterPluginModelsForAuth(ctx context.Context, auth *home
 	if auth == activeAuth && len(activeExcluded) == 0 {
 		activeExcluded = excluded
 	}
+	// Credential-level exclusions take priority over the global oauth-excluded-models config.
 	if activeAuth.Attributes != nil {
 		if val, ok := activeAuth.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
 			activeExcluded = strings.Split(val, ",")
@@ -236,14 +237,11 @@ func (r *Runtime) tryRegisterPluginModelsForAuth(ctx context.Context, auth *home
 	}
 
 	models := pluginModelsToHomeModels(result.Models)
+	candidates := append([]*ModelInfo{}, models...)
 	models = applyExcludedModels(models, activeExcluded)
 	models = applyOAuthModelAlias(cfg, providerKey, activeAuthKind, models)
-	if len(models) > 0 {
-		forcePrefix := cfg != nil && cfg.ForceModelPrefix
-		r.registerResolvedModelsForAuth(activeAuth, providerKey, applyModelPrefixes(models, activeAuth.Prefix, forcePrefix))
-		return true
-	}
-	registry.GetGlobalRegistry().UnregisterClient(activeAuth.ID)
+	forcePrefix := cfg != nil && cfg.ForceModelPrefix
+	r.registerResolvedModelsForAuth(activeAuth, providerKey, applyModelPrefixes(models, activeAuth.Prefix, forcePrefix), candidates)
 	return true
 }
 

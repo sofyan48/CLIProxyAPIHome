@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	cpaconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestV8DownstreamConfigFiltersSecretsAndKeepsScope(t *testing.T) {
@@ -24,6 +25,8 @@ oauth:
     aistudio: {ws-auth: true}
 routing:
   cooldown: {disable-cooling: false}
+requests:
+  tls-handshake-timeout-seconds: 12
 observability:
   usage: {usage-statistics-enabled: false}
 `
@@ -43,10 +46,20 @@ observability:
 	if cpa.Port != 8427 || !cpa.DisableCooling || !cpa.UsageStatisticsEnabled || cpa.WebsocketAuth {
 		t.Fatal("Home invariants lost")
 	}
+	// The bundled CPA release predates this field, so verify the emitted
+	// legacy projection that current CPA maps to
+	// requests.tls-handshake-timeout-seconds.
+	var downstream map[string]any
+	if errDecode := yaml.Unmarshal(data, &downstream); errDecode != nil {
+		t.Fatalf("decode downstream config: %v", errDecode)
+	}
+	if downstream["tls-handshake-timeout-seconds"] != 12 {
+		t.Fatalf("downstream tls-handshake-timeout-seconds = %#v, want 12", downstream["tls-handshake-timeout-seconds"])
+	}
 	if !cpa.Codex.DisableCodexCloaking || !cpa.ForAPIKey().Codex.DisableCodexCloaking || cpa.CodexHeaderDefaults.UserAgent != "oauth-agent" || cpa.ForAPIKey().CodexHeaderDefaults.UserAgent != "" {
 		t.Fatal("shared client settings or OAuth-only header scope lost")
 	}
-	if !strings.Contains(string(data), "disable-codex-cloaking: true") || !strings.Contains(string(data), "port: 8427") {
+	if !strings.Contains(string(data), "disable-codex-cloaking: true") || !strings.Contains(string(data), "port: 8427") || !strings.Contains(string(data), "tls-handshake-timeout-seconds: 12") {
 		t.Fatal("legacy projection missing")
 	}
 }

@@ -484,6 +484,8 @@ func billingChargeResponse(record *cluster.BillingChargeRecord, admin bool) gin.
 		response["balance_before"] = record.BalanceBefore
 		response["matched_price_rule"] = record.MatchedPriceRule
 		response["price_snapshot"] = record.PriceSnapshot
+		response["cache_read_tokens"] = record.CacheReadTokens
+		response["cache_write_tokens"] = record.CacheWriteTokens
 	}
 	return response
 }

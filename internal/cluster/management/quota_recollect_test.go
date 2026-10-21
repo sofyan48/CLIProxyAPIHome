@@ -124,6 +124,28 @@ func TestCollectQuotaNormalizesGrokProvider(t *testing.T) {
 	}
 }
 
+func TestCollectQuotaAcceptsMetaAndMuseAlias(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	trigger := &fakeQuotaRecollectTrigger{accepted: 1}
+	handler.SetQuotaRecollectTrigger(trigger)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/quota/collect", handler.CollectQuota)
+
+	for _, raw := range []string{"meta", "muse"} {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/quota/collect", strings.NewReader(`{"providers":["`+raw+`"]}`)))
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("collect(%s) status = %d body=%s", raw, response.Code, response.Body.String())
+		}
+		if _, ok := trigger.providers["meta"]; !ok || len(trigger.providers) != 1 {
+			t.Fatalf("collect(%s) normalized providers = %v, want meta", raw, trigger.providers)
+		}
+	}
+}
+
 func TestCollectQuotaUnsupportedWithoutTrigger(t *testing.T) {
 	handler, closeRepo := newUsageObservabilityTestHandler(t)
 	defer closeRepo()

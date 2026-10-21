@@ -601,7 +601,13 @@ func TestClusterDisabledCoolingFencesQueuedRequestErrorSnapshots(t *testing.T) {
 			manager := coreauth.NewManager(store, nil, nil)
 			t.Cleanup(manager.Shutdown)
 			manager.SetConfig(&appconfig.Config{DisableCooling: false})
-			if _, errRegister := manager.Register(coreauth.WithSkipPersist(ctx), minimal); errRegister != nil {
+			// Only full credentials may enter the snapshot queue. Keep testing
+			// the existing revision fence with a legitimately persistable auth.
+			full, errFull := adapter.GetFullAuth(ctx, authID)
+			if errFull != nil {
+				t.Fatal(errFull)
+			}
+			if _, errRegister := manager.Register(coreauth.WithSkipPersist(ctx), full); errRegister != nil {
 				t.Fatalf("Register() error = %v", errRegister)
 			}
 

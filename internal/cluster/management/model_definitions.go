@@ -10,6 +10,15 @@ import (
 
 // GetAuthFileModels returns an auth file models.
 func (h *Handler) GetAuthFileModels(c *gin.Context) {
+	h.getCredentialModels(c, false)
+}
+
+// GetCredentialModelsV8 includes the IDs accepted by credential exclusion rules.
+func (h *Handler) GetCredentialModelsV8(c *gin.Context) {
+	h.getCredentialModels(c, true)
+}
+
+func (h *Handler) getCredentialModels(c *gin.Context, includeCandidates bool) {
 	// Normalize source data before building the derived payload.
 	name := strings.TrimSpace(c.Query("name"))
 	if name == "" {
@@ -44,6 +53,18 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	}
 
 	models := registry.GetGlobalRegistry().GetModelsForClient(authID)
+	response := gin.H{"models": credentialModelEntries(models)}
+	if includeCandidates {
+		candidates := registry.GetGlobalRegistry().GetModelCandidatesForClient(authID)
+		response["exclusion_models"] = nil
+		if candidates != nil {
+			response["exclusion_models"] = credentialModelEntries(candidates)
+		}
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func credentialModelEntries(models []*registry.ModelInfo) []gin.H {
 	result := make([]gin.H, 0, len(models))
 	for _, model := range models {
 		if model == nil {
@@ -61,7 +82,7 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 		}
 		result = append(result, entry)
 	}
-	c.JSON(http.StatusOK, gin.H{"models": result})
+	return result
 }
 
 // GetModels returns static or currently available model definitions.

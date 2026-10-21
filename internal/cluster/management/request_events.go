@@ -192,6 +192,7 @@ func requestEventResponse(record *cluster.UsageObservabilityRecord) gin.H {
 		"client":               requestEventClientResponse(record),
 		"error":                requestEventErrorResponse(record),
 		"tokens":               requestEventTokensResponse(record),
+		"token_breakdown":      usageTokenBreakdownResponse(record.Tokens.TokenBreakdown),
 		"performance":          requestEventPerformanceResponse(record),
 		"billing":              requestEventBillingResponse(record),
 		"related":              requestEventRelatedResponse(record),

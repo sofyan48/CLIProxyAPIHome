@@ -148,7 +148,9 @@ func TestManagementV8Routes(t *testing.T) {
 		"GET /oauth/auth-url", "POST /oauth/import", "GET /oauth/status", "DELETE /oauth/session",
 		"GET /server/latest-version", "POST /requests/api-call", "POST /routing/cooldown/reset",
 		"GET /observability/logs", "GET /observability/usage/api-keys", "GET /plugins/store", "DELETE /plugins/:id",
-		"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset", "GET /plugins/:id/quota",
+		"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset",
+		"GET /plugins/:id/quota", "POST /plugins/:id/quota", "DELETE /plugins/:id/quota",
+		"GET /quota/credentials", "GET /quota/credentials/:credential_id", "POST /quota/collect",
 		"GET /users", "POST /users/:id/approve", "POST /users/:id/topup/approve", "GET /nodes", "GET /billing/overview", "GET /access/api-keys",
 	} {
 		method, path, _ := strings.Cut(route, " ")
@@ -160,6 +162,53 @@ func TestManagementV8Routes(t *testing.T) {
 		if registered["GET /v8/management"+path] {
 			t.Errorf("legacy setting registered in v8: %s", path)
 		}
+	}
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/v8/management/observability/logs?anchor_id=invalid", nil))
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "invalid_anchor_id") {
+		t.Fatalf("v8 logs did not use the cursor-aware handler: status %d, body %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestManagementV8QuotaRoutesRemainAvailable(t *testing.T) {
+	for _, database := range []bool{false, true} {
+		t.Run(map[bool]string{false: "SDK", true: "database"}[database], func(t *testing.T) {
+			sdk := cpasdkapi.NewHandlerWithoutConfigFilePath(&cpaconfig.Config{}, nil)
+			legacy := defaultRoutes(sdk)
+			var home *clustermanagement.Handler
+			if database {
+				home = clustermanagement.NewHandler(nil, nil, "", 0)
+				registerClusterManagementRoutes(legacy, home)
+			}
+			engine := gin.New()
+			managementV8Routes(legacy, sdk, home).Register(engine.Group("/v8/management"))
+			registered := make(map[string]bool)
+			for _, route := range engine.Routes() {
+				registered[route.Method+" "+route.Path] = true
+				if route.Method == http.MethodGet && route.Path == "/v8/management/credentials" {
+					wantHandler := "ListAuthFiles"
+					if database {
+						wantHandler = "ListCredentialsV8"
+					}
+					if !strings.Contains(route.Handler, wantHandler) {
+						t.Fatalf("credential handler = %s, want %s", route.Handler, wantHandler)
+					}
+				}
+				if database && route.Method == http.MethodGet && route.Path == "/v8/management/credentials/models" && !strings.Contains(route.Handler, "GetCredentialModelsV8") {
+					t.Fatalf("v8 models route must include exclusion candidates, got %s", route.Handler)
+				}
+			}
+			for _, route := range []string{
+				"GET /credentials",
+				"GET /credentials/quota/providers", "POST /credentials/quota/fetch", "POST /credentials/quota/reset",
+				"GET /plugins/:id/quota", "POST /plugins/:id/quota", "DELETE /plugins/:id/quota",
+			} {
+				method, path, _ := strings.Cut(route, " ")
+				if !registered[method+" /v8/management"+path] {
+					t.Fatalf("missing quota route: %s", route)
+				}
+			}
+		})
 	}
 }
 

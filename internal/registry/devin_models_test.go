@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -52,11 +53,7 @@ func TestEmbeddedDevinModelsLoadedOnStartup(t *testing.T) {
 }
 
 func TestDevinModelsRemoteFetchFallback(t *testing.T) {
-	origURLs := devinModelsURLs
-	t.Cleanup(func() {
-		devinModelsURLs = origURLs
-		_, _ = loadDevinModelsFromBytes(embeddedDevinModelsJSON, "restore-embed")
-	})
+	updater := newDevinCatalogTestUpdater(t)
 
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
@@ -64,13 +61,14 @@ func TestDevinModelsRemoteFetchFallback(t *testing.T) {
 	t.Cleanup(failing.Close)
 	devinModelsURLs = []string{failing.URL + "/devin_models.json"}
 
-	initialCount := len(GetDevinModels())
+	initialModels := GetDevinModels()
+	initialCount := len(initialModels)
 	if initialCount == 0 {
 		t.Fatal("expected non-empty initial Devin models")
 	}
-	tryRefreshDevinModels(context.Background(), "test failing refresh")
-	if got := len(GetDevinModels()); got != initialCount {
-		t.Fatalf("catalog count after failed refresh = %d, want %d", got, initialCount)
+	updater.refresh(context.Background(), "", 0)
+	if got := GetDevinModels(); !reflect.DeepEqual(got, initialModels) {
+		t.Fatal("failed refresh changed catalog")
 	}
 
 	valid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +77,7 @@ func TestDevinModelsRemoteFetchFallback(t *testing.T) {
 	}))
 	t.Cleanup(valid.Close)
 	devinModelsURLs = []string{valid.URL + "/devin_models.json"}
-	tryRefreshDevinModels(context.Background(), "test succeeding refresh")
+	updater.refresh(context.Background(), "", 0)
 
 	updated := GetDevinModels()
 	if len(updated) != 1 || updated[0].ID != "devin/custom-test-model" {
@@ -88,11 +86,7 @@ func TestDevinModelsRemoteFetchFallback(t *testing.T) {
 }
 
 func TestDevinModelsRemoteSkipsInvalidPrimaryAndUsesBackup(t *testing.T) {
-	origURLs := devinModelsURLs
-	t.Cleanup(func() {
-		devinModelsURLs = origURLs
-		_, _ = loadDevinModelsFromBytes(embeddedDevinModelsJSON, "restore-embed")
-	})
+	updater := newDevinCatalogTestUpdater(t)
 
 	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -107,10 +101,34 @@ func TestDevinModelsRemoteSkipsInvalidPrimaryAndUsesBackup(t *testing.T) {
 	t.Cleanup(backup.Close)
 
 	devinModelsURLs = []string{invalid.URL + "/devin_models.json", backup.URL + "/devin_models.json"}
-	tryRefreshDevinModels(context.Background(), "test invalid primary")
+	updater.refresh(context.Background(), "", 0)
 
 	updated := GetDevinModels()
 	if len(updated) != 1 || updated[0].ID != "devin/backup-model" {
 		t.Fatalf("updated catalog = %+v, want backup-model from second source", updated)
 	}
+}
+
+// newDevinCatalogTestUpdater exercises production fetch/publication synchronously
+// without starting goroutines or changing process-wide updater generations.
+func newDevinCatalogTestUpdater(t *testing.T) *catalogUpdater {
+	t.Helper()
+	oldURLs := devinModelsURLs
+	devinCatalogStore.mu.RLock()
+	oldModels, oldData, oldRevision := devinCatalogStore.models, devinCatalogStore.rawJSON, devinCatalogStore.revision
+	devinCatalogStore.mu.RUnlock()
+	refreshCallbackMu.Lock()
+	oldCallback, oldPending := refreshCallback, pendingRefreshChanges
+	refreshCallback, pendingRefreshChanges = nil, nil
+	refreshCallbackMu.Unlock()
+	t.Cleanup(func() {
+		devinModelsURLs = oldURLs
+		devinCatalogStore.mu.Lock()
+		devinCatalogStore.models, devinCatalogStore.rawJSON, devinCatalogStore.revision = oldModels, oldData, oldRevision
+		devinCatalogStore.mu.Unlock()
+		refreshCallbackMu.Lock()
+		refreshCallback, pendingRefreshChanges = oldCallback, oldPending
+		refreshCallbackMu.Unlock()
+	})
+	return &catalogUpdater{fetch: devinCatalogUpdater.fetch, publish: devinCatalogUpdater.publish}
 }

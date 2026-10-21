@@ -11,6 +11,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// ListCredentialsV8 includes the quota plugin selected for each credential by the runtime host.
+func (h *Handler) ListCredentialsV8(c *gin.Context) {
+	h.listAuthFiles(c, h.runtime.PluginHost().QuotaProviderPluginIDs(c.Request.Context()))
+}
+
 // RefreshAuthFiles uses the Home refresh coordinator so refreshed credentials
 // follow the database ownership and cross-node fencing rules.
 func (h *Handler) RefreshAuthFiles(c *gin.Context) {

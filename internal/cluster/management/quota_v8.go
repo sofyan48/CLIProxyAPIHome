@@ -118,7 +118,7 @@ func (h *Handler) FetchCredentialQuota(c *gin.Context) {
 	}
 
 	// Built-in Home collectors publish database snapshots asynchronously.
-	if _, supported := quotaRecollectProviders[auth.Provider]; supported && h.quotaRecollect != nil {
+	if _, supported := quotaRecollectProviders[canonicalQuotaRecollectProvider(auth.Provider)]; supported && h.quotaRecollect != nil {
 		accepted, errTrigger := h.quotaRecollect.TriggerCollection(c.Request.Context(), map[string]struct{}{auth.ID: {}}, nil)
 		if errTrigger != nil {
 			respondError(c, http.StatusInternalServerError, "quota_collect_failed", errTrigger)

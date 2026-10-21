@@ -95,6 +95,9 @@ func (r *Repository) UpdateModelGroup(ctx context.Context, id uint, update Model
 	record := &ModelGroupRecord{}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errFirst := tx.Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
 		}
@@ -116,7 +119,7 @@ func (r *Repository) UpdateModelGroup(ctx context.Context, id uint, update Model
 	return record, nil
 }
 
-// DeleteModelGroup deletes a model group and its details.
+// DeleteModelGroup deletes a model group, its details, and references to it.
 func (r *Repository) DeleteModelGroup(ctx context.Context, id uint) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -141,7 +144,10 @@ func (r *Repository) DeleteModelGroup(ctx context.Context, id uint) error {
 		if errDeleteDetails := tx.Where("model_group_id = ?", id).Delete(&ModelGroupDetailRecord{}).Error; errDeleteDetails != nil {
 			return errDeleteDetails
 		}
-		return tx.Delete(&record).Error
+		if errDelete := tx.Delete(&record).Error; errDelete != nil {
+			return errDelete
+		}
+		return removeAccessGroupBindings(tx, nil, []uint{id})
 	})
 }
 
@@ -256,6 +262,9 @@ func (r *Repository) CreateModelGroupDetail(ctx context.Context, modelGroupID ui
 	}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errGroup := ensureModelGroupExists(ctx, tx, modelGroupID); errGroup != nil {
 			return errGroup
 		}
@@ -283,6 +292,9 @@ func (r *Repository) UpdateModelGroupDetail(ctx context.Context, id uint, update
 	record := &ModelGroupDetailRecord{}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errFirst := tx.Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
 		}

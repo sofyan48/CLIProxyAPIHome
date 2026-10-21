@@ -508,19 +508,7 @@ func (h *Handler) PutAPIKeys(c *gin.Context) {
 			respondError(c, http.StatusPreconditionFailed, "api_keys_precondition_failed", errReplace)
 			return
 		}
-		if cluster.IsAPIKeyConflictError(errReplace) {
-			respondError(c, http.StatusConflict, "api_key_exists", errReplace)
-			return
-		}
-		if errors.Is(errReplace, cluster.ErrUserNotFound) {
-			respondError(c, http.StatusNotFound, "user_not_found", errReplace)
-			return
-		}
-		if errors.Is(errReplace, cluster.ErrInvalidAPIKeyDisplayName) {
-			respondError(c, http.StatusBadRequest, "invalid_display_name", errReplace)
-			return
-		}
-		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
+		respondAPIKeyMutationError(c, errReplace)
 		return
 	}
 	if stats.RequiresRuntimeRefresh() {

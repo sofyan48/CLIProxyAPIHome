@@ -174,7 +174,11 @@ func TestCollectorSupportsClaudeAntigravityKimiAndXAI(t *testing.T) {
 		windows  int
 		assert   func(*testing.T, *cluster.QuotaCredentialSnapshot)
 	}{
-		{id: "claude-probe", provider: "claude", status: "healthy", windows: 3},
+		{id: "claude-probe", provider: "claude", status: "healthy", windows: 3, assert: func(t *testing.T, item *cluster.QuotaCredentialSnapshot) {
+			if item.Plan == nil || item.Plan.Name != "Team" {
+				t.Fatalf("unexpected claude plan: %+v", item.Plan)
+			}
+		}},
 		{id: "antigravity-probe", provider: "antigravity", status: "healthy", windows: 4, assert: func(t *testing.T, item *cluster.QuotaCredentialSnapshot) {
 			if len(item.PrimaryWindows) != 2 || item.PrimaryWindows[0].ScopeID == nil || item.PrimaryWindows[1].ScopeID == nil || *item.PrimaryWindows[0].ScopeID != "gemini" || *item.PrimaryWindows[1].ScopeID != "third-party" {
 				t.Fatalf("unexpected antigravity primary windows: %+v", item.PrimaryWindows)

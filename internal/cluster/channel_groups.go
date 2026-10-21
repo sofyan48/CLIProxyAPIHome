@@ -91,6 +91,9 @@ func (r *Repository) UpdateChannelGroup(ctx context.Context, id uint, update Cha
 	record := &ChannelGroupRecord{}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errFirst := tx.Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
 		}
@@ -112,7 +115,7 @@ func (r *Repository) UpdateChannelGroup(ctx context.Context, id uint, update Cha
 	return record, nil
 }
 
-// DeleteChannelGroup deletes a channel group and its details.
+// DeleteChannelGroup deletes a channel group, its details, and references to it.
 func (r *Repository) DeleteChannelGroup(ctx context.Context, id uint) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -124,6 +127,9 @@ func (r *Repository) DeleteChannelGroup(ctx context.Context, id uint) error {
 
 	ctx = contextOrBackground(ctx)
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		record := ChannelGroupRecord{}
 		if errFirst := tx.Where("id = ?", id).First(&record).Error; errFirst != nil {
 			return errFirst
@@ -131,7 +137,10 @@ func (r *Repository) DeleteChannelGroup(ctx context.Context, id uint) error {
 		if errDeleteDetails := tx.Where("channel_group_id = ?", id).Delete(&ChannelGroupDetailRecord{}).Error; errDeleteDetails != nil {
 			return errDeleteDetails
 		}
-		return tx.Delete(&record).Error
+		if errDelete := tx.Delete(&record).Error; errDelete != nil {
+			return errDelete
+		}
+		return removeAccessGroupBindings(tx, []uint{id}, nil)
 	})
 }
 
@@ -194,6 +203,9 @@ func (r *Repository) CreateChannelGroupDetail(ctx context.Context, channelGroupI
 	}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errGroup := ensureChannelGroupExists(ctx, tx, channelGroupID); errGroup != nil {
 			return errGroup
 		}
@@ -221,6 +233,9 @@ func (r *Repository) UpdateChannelGroupDetail(ctx context.Context, id uint, upda
 	record := &ChannelGroupDetailRecord{}
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		if errFirst := tx.Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
 		}

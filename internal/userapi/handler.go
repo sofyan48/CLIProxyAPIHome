@@ -997,6 +997,10 @@ func respondUserError(c *gin.Context, code string, err error) {
 }
 
 func respondAPIKeyWriteError(c *gin.Context, code string, err error) {
+	if errors.Is(err, cluster.ErrDeletedAccessGroup) {
+		respondError(c, http.StatusBadRequest, "invalid_access_group", err)
+		return
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		respondError(c, http.StatusNotFound, "not_found", err)
 		return

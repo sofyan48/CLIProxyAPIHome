@@ -15,3 +15,21 @@ func TestManagementCodexCredentialKeepsConfigurationUpdateSupport(t *testing.T) 
 		t.Fatalf("management codex models = %+v, want enabled", models)
 	}
 }
+
+func TestManagementCodexCredentialSkipsNonUserBuiltins(t *testing.T) {
+	auth := &coreauth.Auth{Provider: "codex", Metadata: map[string]any{"home_config_models": []any{
+		map[string]any{"id": "gpt-image-2", "user_defined": false},
+		map[string]any{"id": "gpt-image-2.5", "user_defined": false},
+		map[string]any{"id": "gpt-image-2.5-flare", "user_defined": false},
+		map[string]any{"id": "gpt-image-2.5-sunburst", "user_defined": false},
+		map[string]any{"id": "custom", "name": "upstream", "user_defined": true},
+		map[string]any{"id": "gpt-image-2.5", "name": "vendor/upstream-image-25", "user_defined": true, "config_display_name": "Custom Image", "force_mapping": true},
+	}}}
+	pairs := credentialModelPairs(auth)
+	if len(pairs) != 2 || pairs[0].Alias != "custom" {
+		t.Fatalf("management codex models = %+v, want two configured models", pairs)
+	}
+	if image := pairs[1]; image.Alias != "gpt-image-2.5" || image.Name != "vendor/upstream-image-25" || image.DisplayName != "Custom Image" || !image.ForceMapping {
+		t.Fatalf("management image mapping changed: %+v", image)
+	}
+}

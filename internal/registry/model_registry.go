@@ -126,6 +126,9 @@ type ModelRegistry struct {
 	// clientModelInfos maps client ID to a map of model ID -> ModelInfo
 	// This preserves the original model info provided by each client
 	clientModelInfos map[string]map[string]*ModelInfo
+	// clientModelCandidates holds IDs before exclusions, OAuth aliases, and prefixes.
+	// These definitions are for management only, never for routing or dispatch.
+	clientModelCandidates map[string][]*ModelInfo
 	// clientProviders maps client ID to its provider identifier
 	clientProviders map[string]string
 	// mutex ensures thread-safe access to the registry
@@ -176,8 +179,41 @@ const modelQuotaExceededWindow = 5 * time.Minute
 //   - clientProvider: Provider name (e.g., "gemini", "claude", "openai")
 //   - models: List of models that this client can provide
 func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models []*ModelInfo) {
+	r.registerClient(clientID, clientProvider, models, nil)
+}
+
+// RegisterClientWithCandidates also records the models that exclusion rules match.
+// Candidates remain available even when every routable model is excluded.
+func (r *ModelRegistry) RegisterClientWithCandidates(clientID, clientProvider string, models, candidates []*ModelInfo) {
+	r.registerClient(clientID, clientProvider, models, candidates)
+}
+
+func (r *ModelRegistry) registerClient(clientID, clientProvider string, models, candidates []*ModelInfo) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	defer func() {
+		if candidates == nil {
+			delete(r.clientModelCandidates, clientID)
+			return
+		}
+		if r.clientModelCandidates == nil {
+			r.clientModelCandidates = make(map[string][]*ModelInfo)
+		}
+		copied := make([]*ModelInfo, 0, len(candidates))
+		seen := make(map[string]struct{}, len(candidates))
+		for _, model := range candidates {
+			if model == nil || strings.TrimSpace(model.ID) == "" {
+				continue
+			}
+			key := strings.ToLower(model.ID)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			copied = append(copied, cloneModelInfo(model))
+		}
+		r.clientModelCandidates[clientID] = copied
+	}()
 
 	provider := strings.ToLower(clientProvider)
 	uniqueModelIDs := make([]string, 0, len(models))
@@ -515,6 +551,7 @@ func (r *ModelRegistry) UnregisterClient(clientID string) {
 
 // unregisterClientInternal handles an unregister client internal.
 func (r *ModelRegistry) unregisterClientInternal(clientID string) {
+	delete(r.clientModelCandidates, clientID)
 	models, exists := r.clientModels[clientID]
 	provider, hasProvider := r.clientProviders[clientID]
 	if !exists {
@@ -567,6 +604,22 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	log.Debugf("Unregistered client %s", clientID)
 	// Separator line after completing client unregistration (after the summary line)
 	misc.LogCredentialSeparator()
+}
+
+// GetModelCandidatesForClient returns a copy of the exclusion candidates.
+// Nil means no candidate snapshot is available for this client.
+func (r *ModelRegistry) GetModelCandidatesForClient(clientID string) []*ModelInfo {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	models, exists := r.clientModelCandidates[clientID]
+	if !exists {
+		return nil
+	}
+	copied := make([]*ModelInfo, 0, len(models))
+	for _, model := range models {
+		copied = append(copied, cloneModelInfo(model))
+	}
+	return copied
 }
 
 // SetModelQuotaExceeded marks a model as quota exceeded for a specific client

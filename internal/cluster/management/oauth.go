@@ -17,12 +17,16 @@ import (
 	"github.com/gin-gonic/gin"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
-	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
-// ListAuthFiles returns an auth files.
+// ListAuthFiles preserves the v0 credential list contract without plugin quota metadata.
 func (h *Handler) ListAuthFiles(c *gin.Context) {
+	h.listAuthFiles(c, nil)
+}
+
+func (h *Handler) listAuthFiles(c *gin.Context, quotaPluginIDs map[string]string) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	auths, errAuths := h.repo.ListAuths(ctx)
@@ -52,6 +56,11 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 			continue
 		}
 		entry := authFileEntry(auth)
+		if pluginID := quotaPluginIDs[strings.ToLower(strings.TrimSpace(auth.Provider))]; pluginID != "" {
+			entry["supports_quota"] = true
+			entry["quota_provider"] = auth.Provider
+			entry["quota_plugin_id"] = pluginID
+		}
 		observed, observedOK := observedCredentials[auth.ID]
 		if observationRead != nil && observedOK {
 			applyInFlightObservationToAuthFile(entry, *observationRead, observed)
@@ -260,11 +269,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 	}
 	removeOAuthFieldPatchIdentifierFields(body)
 	removeOAuthFieldPatchConcurrencyFields(body)
-	var cfg *appconfig.Config
-	if h.runtime != nil {
-		cfg = h.runtime.Config()
-	}
-	changed, errPatch := applyOAuthFieldPatch(auth, body, cfg)
+	changed, errPatch := applyOAuthFieldPatch(auth, body)
 	if errPatch != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errPatch)
 		return
@@ -340,7 +345,10 @@ func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, 
 		return "", errUUID
 	}
 
-	auths := h.synthesizeOAuthPayload(updatedRaw, fileUUID, originalFilename)
+	auths, errSynthesize := h.synthesizeOAuthPayload(updatedRaw, fileUUID, originalFilename)
+	if errSynthesize != nil {
+		return "", errSynthesize
+	}
 	if len(auths) == 0 {
 		return "", fmt.Errorf("unsupported credential json")
 	}
@@ -358,7 +366,7 @@ func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, 
 }
 
 // synthesizeOAuthPayload handles a synthesize o auth payload.
-func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFilename string) []*coreauth.Auth {
+func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFilename string) ([]*coreauth.Auth, error) {
 	// Resolve credential context before calling upstream OAuth services.
 	cfg := h.runtime.Config()
 	authPath := fileUUID + ".json"
@@ -373,9 +381,12 @@ func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFi
 		_ = auth
 		return fileUUID
 	}
-	auths := synthesizer.SynthesizeAuthFile(sctx, authPath, raw)
+	auths, errSynthesize := synthesizer.SynthesizeAuthFile(sctx, authPath, raw)
+	if errSynthesize != nil {
+		return nil, errSynthesize
+	}
 	cluster.ApplyOriginalAuthFileName(auths, originalFilename)
-	return auths
+	return auths, nil
 }
 
 // replaceOAuthPayloadAuths handles a replace o auth payload auths.
@@ -617,7 +628,7 @@ func authFileDisplayName(auth *coreauth.Auth) string {
 }
 
 // applyOAuthFieldPatch applies an o auth field patch.
-func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage, cfg *appconfig.Config) (bool, error) {
+func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage) (bool, error) {
 	// Resolve credential context before calling upstream OAuth services.
 	normalizedFields := make(map[string]json.RawMessage, len(fields))
 	pathOwners := make(map[string]string, len(fields))
@@ -673,6 +684,22 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 		value, errDecode := decodeOAuthFieldPatchValue(rawValue)
 		if errDecode != nil {
 			return false, fmt.Errorf("invalid field %s", fieldPath)
+		}
+		if rootOAuthField(metadataPath) == "weight" {
+			if metadataPath != "weight" {
+				return false, fmt.Errorf("invalid field %s", fieldPath)
+			}
+			if value != nil {
+				number, okNumber := value.(json.Number)
+				if !okNumber {
+					return false, fmt.Errorf("invalid field %s", fieldPath)
+				}
+				weight, errWeight := credentialweight.ParseValue(number)
+				if errWeight != nil {
+					return false, fmt.Errorf("invalid field %s: %w", fieldPath, errWeight)
+				}
+				value = weight
+			}
 		}
 		if rootOAuthField(metadataPath) == "request_retry" {
 			if metadataPath != "request_retry" {
@@ -731,6 +758,15 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 				delete(auth.Metadata, legacy)
 			}
 		}
+		if metadataPath == "weight" {
+			// Attributes take precedence in the scheduler; remove stale overrides too.
+			delete(auth.Attributes, "weight")
+			if value == nil {
+				delete(auth.Metadata, "weight")
+				changed = true
+				continue
+			}
+		}
 		if metadataPath == "request_retry" {
 			if value == nil {
 				delete(auth.Metadata, "request_retry")
@@ -752,7 +788,9 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 		changed = true
 	}
 	if changed {
-		syncOAuthMetadataFields(auth, touchedRoots, cfg)
+		if errSync := syncOAuthMetadataFields(auth, touchedRoots); errSync != nil {
+			return false, errSync
+		}
 	}
 	return changed, nil
 }
@@ -946,9 +984,9 @@ func oauthHeadersStringMap(value any) (map[string]string, bool) {
 	}
 }
 
-func syncOAuthMetadataFields(auth *coreauth.Auth, touchedRoots map[string]struct{}, cfg *appconfig.Config) {
+func syncOAuthMetadataFields(auth *coreauth.Auth, touchedRoots map[string]struct{}) error {
 	if auth == nil || len(touchedRoots) == 0 {
-		return
+		return nil
 	}
 	if _, ok := touchedRoots["prefix"]; ok {
 		auth.Prefix = stringFromAny(auth.Metadata["prefix"])
@@ -972,26 +1010,11 @@ func syncOAuthMetadataFields(auth *coreauth.Auth, touchedRoots map[string]struct
 		syncOAuthDisabledState(auth)
 	}
 	if _, ok := touchedRoots["excluded_models"]; ok {
-		syncOAuthExcludedModelsAttribute(auth, cfg)
+		if errSync := synthesizer.SyncOAuthExcludedModelsAttributes(auth); errSync != nil {
+			return errSync
+		}
 	}
-}
-
-// syncOAuthExcludedModelsAttribute rebuilds the runtime excluded_models attributes from metadata,
-// merging global oauth-excluded-models the same way auth file synthesis does.
-func syncOAuthExcludedModelsAttribute(auth *coreauth.Auth, cfg *appconfig.Config) {
-	if auth == nil {
-		return
-	}
-	if auth.Attributes == nil {
-		auth.Attributes = make(map[string]string)
-	}
-	// ApplyAuthExcludedModelsMeta never clears attributes, so drop stale values first.
-	delete(auth.Attributes, "excluded_models")
-	delete(auth.Attributes, "excluded_models_hash")
-	if cfg == nil {
-		cfg = &appconfig.Config{}
-	}
-	synthesizer.ApplyAuthExcludedModelsMeta(auth, cfg, synthesizer.ExtractExcludedModelsFromMetadata(auth.Metadata), "oauth")
+	return nil
 }
 
 func syncOAuthHeaderAttributes(auth *coreauth.Auth) {
