@@ -2425,6 +2425,7 @@ Selector 字段：
 | `proxy-url` | string | `proxy_url` 的 alias。 |
 | `headers` | object string to string | 额外上游 headers。空字符串会删除单个 header。 |
 | `priority` | integer or numeric string | 凭证选择优先级。 |
+| `weight` | integer 或 `null` | weighted-round-robin 凭证权重，最大为 `1000000`。非正整数规范化为 `0`（仅在加权路由中排除该凭证）。`null` 删除显式权重及调度器 attribute 覆盖，恢复默认值 `1`；省略则保持不变。字符串、小数、指数表示法、超出范围的整数及 `weight` 下的 nested path 返回 `400`，不会应用 metadata 或 policy 修改。 |
 | `note` | string | 操作备注；空值清空。 |
 | `websockets` | boolean or string bool | 支持的 auth 的 runtime websocket flag。 |
 | `disabled` | boolean or string bool | 更新 auth disabled state 和 status。 |

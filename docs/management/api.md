@@ -2427,6 +2427,7 @@ Editable fields:
 | `proxy-url` | string | Alias for `proxy_url`. |
 | `headers` | object string to string | Extra upstream headers. Empty string deletes a single header. |
 | `priority` | integer or numeric string | Credential selection priority. |
+| `weight` | integer or `null` | Weighted-round-robin credential weight, at most `1000000`. Non-positive integers normalize to `0` (excluded only during weighted routing). `null` removes the explicit weight, including any scheduler attribute override, restoring the default of `1`; omission leaves it unchanged. Strings, fractions, exponent notation, out-of-range integers, and nested paths under `weight` return `400` without applying metadata or policy changes. |
 | `note` | string | Operator note; empty value clears it. |
 | `websockets` | boolean or string bool | Runtime websocket flag for supported auths. |
 | `disabled` | boolean or string bool | Updates auth disabled state and status. |

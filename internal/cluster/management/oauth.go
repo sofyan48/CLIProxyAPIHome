@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
@@ -684,6 +685,22 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 		if errDecode != nil {
 			return false, fmt.Errorf("invalid field %s", fieldPath)
 		}
+		if rootOAuthField(metadataPath) == "weight" {
+			if metadataPath != "weight" {
+				return false, fmt.Errorf("invalid field %s", fieldPath)
+			}
+			if value != nil {
+				number, okNumber := value.(json.Number)
+				if !okNumber {
+					return false, fmt.Errorf("invalid field %s", fieldPath)
+				}
+				weight, errWeight := credentialweight.ParseValue(number)
+				if errWeight != nil {
+					return false, fmt.Errorf("invalid field %s: %w", fieldPath, errWeight)
+				}
+				value = weight
+			}
+		}
 		if rootOAuthField(metadataPath) == "request_retry" {
 			if metadataPath != "request_retry" {
 				return false, fmt.Errorf("invalid field %s", fieldPath)
@@ -739,6 +756,15 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 		if root := rootOAuthField(metadataPath); root != "" {
 			if legacy := legacyOAuthMetadataKey(root); legacy != "" {
 				delete(auth.Metadata, legacy)
+			}
+		}
+		if metadataPath == "weight" {
+			// Attributes take precedence in the scheduler; remove stale overrides too.
+			delete(auth.Attributes, "weight")
+			if value == nil {
+				delete(auth.Metadata, "weight")
+				changed = true
+				continue
 			}
 		}
 		if metadataPath == "request_retry" {
