@@ -10,6 +10,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 	log "github.com/sirupsen/logrus"
@@ -129,6 +130,11 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 		r.cfg = oldCfg
 		r.authDir = oldAuthDir
 		r.cfgMu.Unlock()
+		if oldCfg != nil {
+			registry.UpdateModelCatalogSources(oldCfg.Models)
+		} else {
+			registry.UpdateModelCatalogSources(config.ModelCatalogs{})
+		}
 		return errReload
 	}
 
@@ -147,6 +153,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	configaccess.Register(&cfg.SDKConfig)
 	r.refreshAccessProviders()
 	managementasset.SetCurrentConfig(cfg)
+	registry.UpdateModelCatalogSources(cfg.Models)
 
 	if globalDisableCoolingActivated && r.coreManager != nil {
 		if errFence := r.coreManager.FenceDisabledCooldownStates(ctx); errFence != nil {

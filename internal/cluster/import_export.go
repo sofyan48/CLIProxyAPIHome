@@ -15,6 +15,7 @@ import (
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
@@ -628,7 +629,11 @@ func collectImportAuthFiles(cfg *appconfig.Config, authDir string, now time.Time
 			return currentFileUUID
 		}
 
-		auths := synthesizer.SynthesizeAuthFile(sctx, fullPath, updatedPayload)
+		auths, errSynthesize := synthesizer.SynthesizeAuthFile(sctx, fullPath, updatedPayload)
+		if errSynthesize != nil {
+			// Imported files are existing credentials: keep them with only their valid exclusion rules.
+			log.WithError(errSynthesize).Warnf("ignoring invalid excluded models in auth file %s", entry.Name())
+		}
 		if len(auths) == 0 {
 			stats.Skipped++
 			continue

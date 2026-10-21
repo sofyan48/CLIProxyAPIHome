@@ -25,7 +25,7 @@ func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch
 		return dispatch.Err("runtime not ready")
 	}
 
-	payload, errBuild := buildModelsJSON(env)
+	payload, errBuild := buildModelsJSON(env, nil)
 	if errBuild != nil {
 		return dispatch.Err(errBuild.Error())
 	}
@@ -34,7 +34,7 @@ func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch
 
 // buildModelsJSON assembles the models payload grouped by provider bucket.
 // Authentication is the caller's responsibility.
-func buildModelsJSON(env dispatch.Env) (string, error) {
+func buildModelsJSON(env dispatch.Env, policy *coreauth.ModelAccess) (string, error) {
 	if env.Runtime == nil || env.Runtime.CoreManager() == nil {
 		return "", errRuntimeNotReady
 	}
@@ -108,7 +108,7 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 	reg := registry.GetGlobalRegistry()
 	auths := manager.List()
 	for _, auth := range auths {
-		if auth == nil || auth.Disabled || auth.ID == "" {
+		if auth == nil || auth.Disabled || auth.Status == coreauth.StatusDisabled || auth.ID == "" {
 			continue
 		}
 		groupKey := resolveGroupKey(auth)
@@ -117,7 +117,9 @@ func buildModelsJSON(env dispatch.Env) (string, error) {
 		}
 		models := reg.GetModelsForClient(auth.ID)
 		for _, model := range models {
-			addModel(groupKey, auth, model)
+			if model != nil && policy.Allows(auth.ID, model.ID) {
+				addModel(groupKey, auth, model)
+			}
 		}
 	}
 

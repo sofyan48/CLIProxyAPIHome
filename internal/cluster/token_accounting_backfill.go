@@ -165,8 +165,9 @@ func runUsageTokenAccountingBackfillBatchTx(ctx context.Context, tx *gorm.DB, ba
 
 func firstPendingUsageTokenAccountingRecord(ctx context.Context, tx *gorm.DB) (*UsageRecord, error) {
 	var record UsageRecord
+	// A literal schema version lets PostgreSQL generic plans use the partial index.
 	result := tx.WithContext(contextOrBackground(ctx)).Select("id").
-		Where("token_accounting_version <> ?", UsageTokenAccountingSchemaVersion).
+		Where(fmt.Sprintf(`"token_accounting_version" <> %d`, UsageTokenAccountingSchemaVersion)).
 		Order("id ASC").
 		Limit(1).
 		Find(&record)
@@ -226,8 +227,9 @@ func (r *Repository) UsageTokenBreakdownV2Ready(ctx context.Context) (bool, erro
 		return false, errDB
 	}
 	var record UsageRecord
+	// Match the partial index predicate even when PostgreSQL uses a generic plan.
 	result := db.WithContext(contextOrBackground(ctx)).Select("id").
-		Where("token_accounting_version <> ?", UsageTokenAccountingSchemaVersion).
+		Where(fmt.Sprintf(`"token_accounting_version" <> %d`, UsageTokenAccountingSchemaVersion)).
 		Limit(1).
 		Find(&record)
 	if result.Error != nil {

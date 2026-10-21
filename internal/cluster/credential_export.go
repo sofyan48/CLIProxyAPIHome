@@ -491,7 +491,7 @@ func credentialModelPairs(auth *coreauth.Auth) []credentialModelPair {
 		if alias == "" {
 			continue
 		}
-		if isNonUserCodexBuiltin(modelMap, alias) {
+		if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && isNonUserCodexBuiltin(modelMap, alias) {
 			continue
 		}
 		name := strings.TrimSpace(stringFromAny(modelMap["name"]))
@@ -520,9 +520,9 @@ func credentialModelPairs(auth *coreauth.Auth) []credentialModelPair {
 	return out
 }
 
-// isNonUserCodexBuiltin reports whether non user codex builtin.
+// isNonUserCodexBuiltin reports whether alias is a Codex built-in that was not configured by the user.
 func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
-	if !strings.EqualFold(alias, "gpt-image-2") {
+	if !registry.IsCodexBuiltinModelID(alias) {
 		return false
 	}
 	userDefined, ok := boolFromAny(modelMap["user_defined"])

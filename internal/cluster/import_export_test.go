@@ -265,6 +265,41 @@ func TestImportLocalStateRejectsDuplicateProviderCredentialIDs(t *testing.T) {
 	}
 }
 
+func TestImportLocalStateKeepsAuthFilesWithInvalidExcludedModels(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	authDir := filepath.Join(dir, "auth")
+	if errMk := os.MkdirAll(authDir, 0o700); errMk != nil {
+		t.Fatal(errMk)
+	}
+	writeFile(t, configPath, "gemini-api-key:\n  - api-key: gemini\n")
+	writeFile(t, filepath.Join(authDir, "a.json"), `{"type":"antigravity","email":"a@example.test"}`)
+	writeFile(t, filepath.Join(authDir, "b.json"), `{"type":"antigravity","email":"b@example.test","excluded_models":123}`)
+	writeFile(t, filepath.Join(authDir, "c.json"), `{"type":"antigravity","email":"c@example.test","excluded_models":["Model-A",1]}`)
+	repo := NewRepository(openImportTestSQLite(t))
+
+	// Imported files are existing credentials, so invalid rules must not abort the import.
+	if _, errImport := ImportLocalState(ctx, ImportOptions{ConfigPath: configPath, AuthDir: authDir, Repository: repo}); errImport != nil {
+		t.Fatalf("ImportLocalState() error = %v", errImport)
+	}
+	auths, errList := repo.ListAuths(ctx)
+	if errList != nil {
+		t.Fatalf("ListAuths() error = %v", errList)
+	}
+	got := make(map[string]string)
+	for _, auth := range auths {
+		if email, _ := auth.Metadata["email"].(string); email != "" {
+			got[email] = auth.Attributes["excluded_models"]
+		}
+	}
+	for email, want := range map[string]string{"a@example.test": "", "b@example.test": "", "c@example.test": "model-a"} {
+		if rules, ok := got[email]; !ok || rules != want {
+			t.Fatalf("%s imported = %t with rules %q, want imported with %q (all: %v)", email, ok, rules, want, got)
+		}
+	}
+}
+
 func TestImportLocalStateRejectsExistingCredentialIdentityCollisions(t *testing.T) {
 	tests := []struct {
 		name     string

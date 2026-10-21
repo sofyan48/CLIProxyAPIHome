@@ -1,23 +1,17 @@
 package registry
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
-const (
-	modelsFetchTimeout    = 30 * time.Second
-	modelsRefreshInterval = 3 * time.Hour
-)
+const modelsRefreshInterval = 3 * time.Hour
+
+var modelsFetchTimeout = 30 * time.Second
 
 var modelsURLs = []string{
 	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json",
@@ -33,8 +27,6 @@ type modelStore struct {
 }
 
 var modelsCatalogStore = &modelStore{}
-
-var updaterOnce sync.Once
 
 // ModelRefreshCallback is invoked when startup or periodic model refresh detects changes.
 // changedProviders contains the provider names whose model definitions changed.
@@ -70,140 +62,6 @@ func init() {
 	if err := loadModelsFromBytes(embeddedModelsJSON, "embed"); err != nil {
 		panic(fmt.Sprintf("registry: failed to parse embedded models.json: %v", err))
 	}
-}
-
-// StartModelsUpdater starts a background updater that fetches models
-// immediately on startup and then refreshes the model catalog every 3 hours.
-// Safe to call multiple times; only one updater will run.
-func StartModelsUpdater(ctx context.Context) {
-	updaterOnce.Do(func() {
-		go runModelsUpdater(ctx)
-	})
-}
-
-// runModelsUpdater runs a models updater.
-func runModelsUpdater(ctx context.Context) {
-	tryStartupRefresh(ctx)
-	periodicRefresh(ctx)
-}
-
-// periodicRefresh runs a periodic refresh on a schedule.
-func periodicRefresh(ctx context.Context) {
-	ticker := time.NewTicker(modelsRefreshInterval)
-	defer ticker.Stop()
-	log.Infof("periodic model refresh started (interval=%s)", modelsRefreshInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			tryPeriodicRefresh(ctx)
-		}
-	}
-}
-
-// tryPeriodicRefresh fetches models from remote, compares with the current
-// catalog, and notifies the registered callback if any provider changed.
-func tryPeriodicRefresh(ctx context.Context) {
-	tryRefreshModels(ctx, "periodic model refresh")
-}
-
-// tryStartupRefresh fetches models from remote in the background during
-// process startup. It uses the same change detection as periodic refresh so
-// existing auth registrations can be updated after the callback is registered.
-func tryStartupRefresh(ctx context.Context) {
-	tryRefreshModels(ctx, "startup model refresh")
-}
-
-// tryRefreshModels attempts a refresh models.
-func tryRefreshModels(ctx context.Context, label string) {
-	oldData := getModels()
-
-	parsed, url := fetchModelsFromRemote(ctx)
-	if parsed == nil {
-		log.Warnf("%s: fetch failed from all URLs, keeping current data", label)
-		return
-	}
-	if oldData != nil {
-		if len(parsed.Devin) == 0 {
-			parsed.Devin = oldData.Devin
-		}
-		if len(parsed.Meta) == 0 {
-			parsed.Meta = oldData.Meta
-		}
-	}
-
-	// Detect changes before updating store.
-	changed := detectChangedProviders(oldData, parsed)
-
-	// Update store with new data regardless.
-	modelsCatalogStore.mu.Lock()
-	modelsCatalogStore.data = parsed
-	modelsCatalogStore.mu.Unlock()
-
-	if len(changed) == 0 {
-		log.Infof("%s completed from %s, no changes detected", label, url)
-		return
-	}
-
-	log.Infof("%s completed from %s, changes detected for providers: %v", label, url, changed)
-	notifyModelRefresh(changed)
-}
-
-// fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog
-// along with the URL it was fetched from. Returns (nil, "") if all fetches fail.
-func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
-	// Normalize source data before building the derived payload.
-	client := &http.Client{Timeout: modelsFetchTimeout}
-	for _, url := range modelsURLs {
-		reqCtx, cancel := context.WithTimeout(ctx, modelsFetchTimeout)
-		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
-		if err != nil {
-			cancel()
-			log.Debugf("models fetch request creation failed for %s: %v", url, err)
-			continue
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			cancel()
-			log.Debugf("models fetch failed from %s: %v", url, err)
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			if errClose := resp.Body.Close(); errClose != nil {
-				log.Errorf("models fetch: response body close error: %v", errClose)
-			}
-			cancel()
-			log.Debugf("models fetch returned %d from %s", resp.StatusCode, url)
-			continue
-		}
-
-		data, errRead := io.ReadAll(resp.Body)
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("models fetch: response body close error: %v", errClose)
-		}
-		cancel()
-
-		if errRead != nil {
-			log.Debugf("models fetch read error from %s: %v", url, errRead)
-			continue
-		}
-
-		var parsed staticModelsJSON
-		if err := json.Unmarshal(data, &parsed); err != nil {
-			log.Warnf("models parse failed from %s: %v", url, err)
-			continue
-		}
-		if err := validateModelsCatalog(&parsed); err != nil {
-			log.Warnf("models validate failed from %s: %v", url, err)
-			continue
-		}
-
-		return &parsed, url
-	}
-	return nil, ""
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names

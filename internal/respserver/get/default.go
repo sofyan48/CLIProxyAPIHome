@@ -66,11 +66,19 @@ func handleDefaultModels(ctx context.Context, env dispatch.Env, jsonArg string) 
 	req.Header = parseHeaders(jsonArg)
 	req.URL.RawQuery = parseQuery(jsonArg).Encode()
 
-	if _, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req); authErr != nil {
+	authResult, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req)
+	if authErr != nil {
 		return dispatch.BulkString([]byte(buildAuthErrorJSON(authErr)))
 	}
+	if authResult == nil || strings.TrimSpace(authResult.Principal) == "" {
+		return dispatch.BulkString([]byte(buildAuthErrorJSON(access.NewInvalidCredentialError())))
+	}
+	policy, errPolicy := env.Runtime.ModelAccessForAPIKey(ctx, authResult.Principal)
+	if errPolicy != nil {
+		return dispatch.BulkString([]byte(buildAuthErrorJSON(access.NewInternalAuthError("Model access service error", errPolicy))))
+	}
 
-	payload, errBuild := buildModelsJSON(env)
+	payload, errBuild := buildModelsJSON(env, policy)
 	if errBuild != nil {
 		return dispatch.BulkString([]byte(buildErrorJSON(errBuild.Error())))
 	}

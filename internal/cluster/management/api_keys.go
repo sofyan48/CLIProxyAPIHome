@@ -647,6 +647,8 @@ func applyAPIKeyEntryUpdate(update *cluster.APIKeyAdminUpdate, entry cluster.API
 
 func respondAPIKeyMutationError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, cluster.ErrDeletedAccessGroup):
+		respondError(c, http.StatusBadRequest, "invalid_access_group", err)
 	case cluster.IsAPIKeyConflictError(err):
 		respondError(c, http.StatusConflict, "api_key_exists", err)
 	case errors.Is(err, cluster.ErrUserNotFound):

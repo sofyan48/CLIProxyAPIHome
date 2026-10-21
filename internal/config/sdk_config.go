@@ -12,6 +12,13 @@ type SDKConfig struct {
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
+	// TLSHandshakeTimeoutSeconds is a CPA option that bounds upstream TLS
+	// handshakes made by CPA's shared uTLS client, in seconds. CPA applies
+	// it to both its Claude Code Anthropic transport and its Chrome
+	// ChatGPT/Codex transport. Home only stores and forwards the value;
+	// the default 0 disables it in CPA.
+	TLSHandshakeTimeoutSeconds int `yaml:"tls-handshake-timeout-seconds" json:"tls-handshake-timeout-seconds"`
+
 	// DisableImageGeneration controls whether the built-in image_generation tool is injected/allowed.
 	//
 	// Supported values:
@@ -66,4 +73,8 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+
+	// SendKeepAliveBeforeFT controls whether SSE heartbeats are sent before the first token arrives
+	// when KeepAliveSeconds > 0. Default is false.
+	SendKeepAliveBeforeFT bool `yaml:"send-keepalive-before-ft,omitempty" json:"send-keepalive-before-ft,omitempty"`
 }

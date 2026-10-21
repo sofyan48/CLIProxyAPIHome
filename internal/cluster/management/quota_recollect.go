@@ -24,6 +24,19 @@ var quotaRecollectProviders = map[string]struct{}{
 	"codex":       {},
 	"kimi":        {},
 	"xai":         {},
+	"meta":        {},
+}
+
+func canonicalQuotaRecollectProvider(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "grok":
+		return "xai"
+	case "muse":
+		return "meta"
+	default:
+		return value
+	}
 }
 
 func (h *Handler) SetQuotaRecollectTrigger(trigger QuotaRecollectTrigger) {
@@ -59,12 +72,9 @@ func (h *Handler) CollectQuota(c *gin.Context) {
 	}
 	providers := make(map[string]struct{}, len(body.Providers))
 	for _, raw := range body.Providers {
-		value := strings.ToLower(strings.TrimSpace(raw))
+		value := canonicalQuotaRecollectProvider(raw)
 		if value == "" {
 			continue
-		}
-		if value == "grok" {
-			value = "xai"
 		}
 		if _, ok := quotaRecollectProviders[value]; !ok {
 			respondQuotaHTTPError(c, http.StatusBadRequest, "INVALID_FILTER", "providers contains an unsupported value: "+value, false)

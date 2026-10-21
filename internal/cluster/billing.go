@@ -79,29 +79,33 @@ type BillingBalanceRecord struct {
 func (BillingBalanceRecord) TableName() string { return "billing_balance_record" }
 
 type BillingChargeRecord struct {
-	ID               string    `gorm:"column:id;primaryKey"`
-	UsageID          uint      `gorm:"column:usage_id;not null;uniqueIndex"`
-	PayloadHash      string    `gorm:"column:payload_hash;not null;uniqueIndex"`
-	UserID           *uint     `gorm:"column:user_id;index:idx_billing_charge_user_time,priority:1"`
-	APIKeyID         *uint     `gorm:"column:api_key_id;index"`
-	APIKeyLabel      string    `gorm:"column:api_key_label"`
-	APIKeyMasked     string    `gorm:"column:api_key_masked"`
-	Provider         string    `gorm:"column:provider;index:idx_billing_charge_provider_model_time,priority:1"`
-	Model            string    `gorm:"column:model;index:idx_billing_charge_provider_model_time,priority:2"`
-	OriginalModel    string    `gorm:"column:original_model"`
-	ActualModel      string    `gorm:"column:actual_model"`
-	RequestID        string    `gorm:"column:request_id;index"`
-	Endpoint         string    `gorm:"column:endpoint;index"`
-	InputTokens      int64     `gorm:"column:input_tokens;not null;default:0"`
-	OutputTokens     int64     `gorm:"column:output_tokens;not null;default:0"`
-	CacheTokens      int64     `gorm:"column:cache_tokens;not null;default:0"`
-	Amount           float64   `gorm:"column:amount;not null;default:0"`
-	BalanceBefore    float64   `gorm:"column:balance_before;not null;default:0"`
-	BalanceAfter     float64   `gorm:"column:balance_after;not null;default:0"`
-	MatchedPriceRule string    `gorm:"column:matched_price_rule"`
-	PriceSnapshot    JSONB     `gorm:"column:price_snapshot;not null"`
-	RequestSummary   string    `gorm:"column:request_summary;type:text"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
+	ID               string  `gorm:"column:id;primaryKey;index:idx_billing_charge_time_order,priority:2,sort:desc"`
+	UsageID          uint    `gorm:"column:usage_id;not null;uniqueIndex"`
+	PayloadHash      string  `gorm:"column:payload_hash;not null;uniqueIndex"`
+	UserID           *uint   `gorm:"column:user_id;index:idx_billing_charge_user_time,priority:1"`
+	APIKeyID         *uint   `gorm:"column:api_key_id;index"`
+	APIKeyLabel      string  `gorm:"column:api_key_label"`
+	APIKeyMasked     string  `gorm:"column:api_key_masked"`
+	Provider         string  `gorm:"column:provider;index:idx_billing_charge_provider_model_time,priority:1"`
+	Model            string  `gorm:"column:model;index:idx_billing_charge_provider_model_time,priority:2"`
+	OriginalModel    string  `gorm:"column:original_model"`
+	ActualModel      string  `gorm:"column:actual_model"`
+	RequestID        string  `gorm:"column:request_id;index"`
+	Endpoint         string  `gorm:"column:endpoint;index"`
+	InputTokens      int64   `gorm:"column:input_tokens;not null;default:0"`
+	OutputTokens     int64   `gorm:"column:output_tokens;not null;default:0"`
+	CacheTokens      int64   `gorm:"column:cache_tokens;not null;default:0"`
+	Amount           float64 `gorm:"column:amount;not null;default:0"`
+	BalanceBefore    float64 `gorm:"column:balance_before;not null;default:0"`
+	BalanceAfter     float64 `gorm:"column:balance_after;not null;default:0"`
+	MatchedPriceRule string  `gorm:"column:matched_price_rule"`
+	PriceSnapshot    JSONB   `gorm:"column:price_snapshot;not null"`
+	RequestSummary   string  `gorm:"column:request_summary;type:text"`
+	// Display-only cache split filled by ListBillingCharges from the linked usage
+	// row's v2 token accounting; nil when the split is unknown.
+	CacheReadTokens  *int64    `gorm:"-"`
+	CacheWriteTokens *int64    `gorm:"-"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
 }
 
 func (BillingChargeRecord) TableName() string { return "billing_charge" }
@@ -477,14 +481,49 @@ func (r *Repository) ListBillingCharges(ctx context.Context, query BillingCharge
 		return BillingChargeResult{}, errCount
 	}
 
-	var records []BillingChargeRecord
-	if errFind := scope.Order(`"billing_charge"."created_at" DESC, "billing_charge"."id" DESC`).Limit(query.Limit).Offset(query.Offset).Find(&records).Error; errFind != nil {
+	var rows []struct {
+		BillingChargeRecord     `gorm:"embedded"`
+		DisplayInputTokens      int64
+		DisplayOutputTokens     int64
+		DisplayCacheReadTokens  *int64
+		DisplayCacheWriteTokens *int64
+	}
+	if errFind := scope.
+		Joins(`LEFT JOIN "usage" AS "billing_usage" ON "billing_usage"."id" = "billing_charge"."usage_id"`).
+		Select(`"billing_charge".*, ` + billingDisplayTokenSQL("input_tokens") + ` AS display_input_tokens, ` + billingDisplayTokenSQL("output_tokens") + ` AS display_output_tokens, ` + billingDisplayCacheSplitSQL("cache_read_tokens") + ` AS display_cache_read_tokens, ` + billingDisplayCacheSplitSQL("cache_write_tokens") + ` AS display_cache_write_tokens`).
+		Order(`"billing_charge"."created_at" DESC, "billing_charge"."id" DESC`).Limit(query.Limit).Offset(query.Offset).Find(&rows).Error; errFind != nil {
 		return BillingChargeResult{}, errFind
+	}
+	records := make([]BillingChargeRecord, len(rows))
+	for index, row := range rows {
+		records[index] = row.BillingChargeRecord
+		records[index].InputTokens = row.DisplayInputTokens
+		records[index].OutputTokens = row.DisplayOutputTokens
+		records[index].CacheReadTokens = row.DisplayCacheReadTokens
+		records[index].CacheWriteTokens = row.DisplayCacheWriteTokens
 	}
 	return BillingChargeResult{
 		Records: records,
 		Total:   total,
 	}, nil
+}
+
+// billingDisplayTokenSQL keeps list and aggregate presentation consistent without
+// rewriting charge snapshots or changing the counters used to calculate charges.
+// column is an internal token column name, never request input.
+func billingDisplayTokenSQL(column string) string {
+	return fmt.Sprintf(`CASE WHEN "billing_usage"."token_accounting_version" = %d AND "billing_usage"."token_accounting_quality" = '%s'
+		THEN "billing_usage"."accounting_%s" ELSE "billing_charge"."%s" END`,
+		UsageTokenAccountingSchemaVersion, UsageTokenAccountingQualityComplete, column, column)
+}
+
+// billingDisplayCacheSplitSQL exposes the canonical cache read/write buckets only
+// for rows with complete v2 token accounting. Other rows return NULL so clients
+// keep the combined cache counter instead of showing a fabricated split.
+func billingDisplayCacheSplitSQL(column string) string {
+	return fmt.Sprintf(`CASE WHEN "billing_usage"."token_accounting_version" = %d AND "billing_usage"."token_accounting_quality" = '%s'
+		THEN "billing_usage"."accounting_%s" ELSE NULL END`,
+		UsageTokenAccountingSchemaVersion, UsageTokenAccountingQualityComplete, column)
 }
 
 func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQuery) (BillingOverview, error) {
@@ -506,16 +545,18 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		MinCreatedAt      sql.NullString `gorm:"column:min_created_at"`
 		MaxCreatedAt      sql.NullString `gorm:"column:max_created_at"`
 	}
-	if errScan := chargeScope.Select(`
+	if errScan := chargeScope.
+		Joins(`LEFT JOIN "usage" AS "billing_usage" ON "billing_usage"."id" = "billing_charge"."usage_id"`).
+		Select(`
 		COALESCE(SUM("billing_charge"."amount"), 0) AS total_charge_amount,
 		COUNT(*) AS request_count,
-		COALESCE(SUM("billing_charge"."input_tokens"), 0) AS input_tokens,
-		COALESCE(SUM("billing_charge"."output_tokens"), 0) AS output_tokens,
+		COALESCE(SUM(` + billingDisplayTokenSQL("input_tokens") + `), 0) AS input_tokens,
+		COALESCE(SUM(` + billingDisplayTokenSQL("output_tokens") + `), 0) AS output_tokens,
 		COALESCE(SUM("billing_charge"."cache_tokens"), 0) AS cache_tokens,
 		COUNT(DISTINCT "billing_charge"."user_id") AS active_user_count,
 		MIN("billing_charge"."created_at") AS min_created_at,
 		MAX("billing_charge"."created_at") AS max_created_at`,
-	).Scan(&chargeTotals).Error; errScan != nil {
+		).Scan(&chargeTotals).Error; errScan != nil {
 		return BillingOverview{}, errScan
 	}
 

@@ -225,6 +225,9 @@ func (r *Repository) CreateAPIKeyWithRuntimeChange(ctx context.Context, update A
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
 		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
+			return errGroups
+		}
 		if userID != nil {
 			if errUser := ensureUserExists(ctx, tx, *userID); errUser != nil {
 				return errUser
@@ -302,6 +305,9 @@ func (r *Repository) UpdateAPIKeyWithRuntimeChange(ctx context.Context, selector
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
+		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
+			return errGroups
 		}
 		if errFind := findAPIKeyRecord(ctx, tx, selector, record); errFind != nil {
 			return errFind
@@ -476,6 +482,9 @@ func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, us
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
 		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, channels, modelGroups); errGroups != nil {
+			return errGroups
+		}
 		if errFirst := tx.Where("api_key = ?", apiKey).First(record).Error; errFirst != nil {
 			return errFirst
 		}
@@ -567,6 +576,9 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
+		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
+			return errGroups
 		}
 		if errUser := ensureUserExists(ctx, tx, userID); errUser != nil {
 			return errUser
@@ -685,6 +697,9 @@ func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id ui
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
+		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
+			return errGroups
 		}
 		query := tx.WithContext(ctx).Where("user_id = ?", userID)
 		if id > 0 {
@@ -1270,6 +1285,9 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 		key := strings.TrimSpace(entry.APIKey)
 		if key == "" {
 			continue
+		}
+		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, entry.Channels, entry.ModelGroups); errGroups != nil {
+			return APIKeyUpsertStats{}, errGroups
 		}
 		userID := normalizeOptionalUserID(entry.UserID)
 		userIDSet := entry.UserIDSet || entry.UserID != nil

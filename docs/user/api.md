@@ -1134,6 +1134,8 @@ Both `GET /user/capabilities` and `GET /v8/management/capabilities` advertise `c
 
 ### GET `/billing/charges`
 
+Charge queries normalize `input_tokens` and `output_tokens` at read time. When the associated usage has v2 token accounting with `complete` quality, input includes uncached input, cache reads, and cache writes; output includes non-reasoning and reasoning tokens. Pending backfills, non-complete accounting, and missing usage retain the original charge snapshot counters. This presentation conversion does not rewrite stored records or change amounts, price snapshots, balances, or price-band selection.
+
 Lists the authenticated user's billing charges.
 
 Headers:

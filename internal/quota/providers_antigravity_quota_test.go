@@ -2,12 +2,15 @@ package quota
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
@@ -230,6 +233,56 @@ func TestCollectorAntigravityIncompleteResponseRetainsLastKnownWindows(t *testin
 			}
 			if item.Windows[0].ID != "antigravity-gemini-weekly" || item.Windows[1].ID != "antigravity-3p-weekly" {
 				t.Fatalf("last-known windows changed after incomplete response: %+v", item.Windows)
+			}
+		})
+	}
+}
+
+func TestProbeAntigravityUsesRequestUserAgent(t *testing.T) {
+	const body = `{"groups":[{"buckets":[{"bucketId":"gemini-weekly","remainingFraction":0.9}]},{"buckets":[{"bucketId":"3p-weekly","remainingFraction":0.8}]}]}`
+	tests := []struct {
+		name string
+		auth *coreauth.Auth
+		want string
+	}{
+		{
+			name: "default hub user agent",
+			auth: &coreauth.Auth{Provider: "antigravity", Metadata: map[string]any{"access_token": "ag-secret", "project_id": "project-123"}},
+			want: cpasdkauth.AntigravityUserAgent(),
+		},
+		{
+			name: "configured metadata user agent",
+			auth: &coreauth.Auth{Provider: "antigravity", Metadata: map[string]any{
+				"access_token": "ag-secret", "project_id": "project-123",
+				"user_agent": "antigravity/hub/1.23.2 windows/amd64 google-api-nodejs-client/10.3.0",
+			}},
+			want: "antigravity/hub/1.23.2 windows/amd64",
+		},
+		{
+			name: "configured attribute user agent wins",
+			auth: &coreauth.Auth{Provider: "antigravity", Attributes: map[string]string{"user_agent": "antigravity/hub/2.30.0 darwin/arm64"}, Metadata: map[string]any{
+				"access_token": "ag-secret", "project_id": "project-123", "user_agent": "antigravity/1.11.5 windows/amd64",
+			}},
+			want: "antigravity/hub/2.30.0 darwin/arm64",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotUserAgent string
+			collector := NewCollector(newCollectorTestRepository(t), Options{
+				AntigravityURLs: []string{"https://antigravity.invalid/quota"},
+				HTTPClient: func(*coreauth.Auth, time.Duration) (*http.Client, error) {
+					return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+						gotUserAgent = request.Header.Get("User-Agent")
+						return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+					})}, nil
+				},
+			})
+			if _, failure := collector.probeAntigravity(context.Background(), test.auth); failure != nil {
+				t.Fatalf("probeAntigravity() failure = %+v", failure)
+			}
+			if gotUserAgent != test.want {
+				t.Fatalf("User-Agent = %q, want %q", gotUserAgent, test.want)
 			}
 		})
 	}

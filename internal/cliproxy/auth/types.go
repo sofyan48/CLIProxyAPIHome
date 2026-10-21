@@ -49,6 +49,9 @@ type Auth struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 	// Metadata stores runtime mutable provider state (e.g. tokens, cookies).
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// RuntimeProjection marks an incomplete scheduling view that must never be
+	// saved as a complete credential. Full database snapshots leave this false.
+	RuntimeProjection bool `json:"-"`
 	// RuntimeDisableCooling carries the auth-scoped cooling override in minimal
 	// projections without serializing provider metadata or secrets.
 	RuntimeDisableCooling *bool `json:"-"`

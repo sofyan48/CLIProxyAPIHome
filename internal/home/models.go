@@ -113,15 +113,11 @@ func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName 
 }
 
 // registerResolvedModelsForAuth returns a register resolved models for auth.
-func (r *Runtime) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey string, models []*ModelInfo) {
+func (r *Runtime) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey string, models, candidates []*ModelInfo) {
 	if a == nil || a.ID == "" {
 		return
 	}
-	if len(models) == 0 {
-		registry.GetGlobalRegistry().UnregisterClient(a.ID)
-		return
-	}
-	registry.GetGlobalRegistry().RegisterClient(a.ID, providerKey, models)
+	registry.GetGlobalRegistry().RegisterClientWithCandidates(a.ID, providerKey, models, candidates)
 }
 
 func dispatchModelInfoForAuth(authID, upstreamModel, routeModel string) *DispatchModelInfo {
@@ -205,8 +201,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 	}
 
 	excluded := r.oauthExcludedModels(cfg, provider, authKind)
-	// The synthesizer pre-merges per-account and global exclusions into the "excluded_models" attribute.
-	// If this attribute is present, it represents the complete list of exclusions and overrides the global config.
+	// The "excluded_models" attribute holds only the credential's own exclusions.
+	// When present it takes priority over the global oauth-excluded-models config;
+	// otherwise the current global config applies, so global changes take effect without rewriting credentials.
 	if a.Attributes != nil {
 		if val, ok := a.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
 			excluded = strings.Split(val, ",")
@@ -231,7 +228,6 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "gemini-interactions":
 		models = registry.GetGeminiModels()
 		if len(configModels) > 0 {
@@ -244,7 +240,6 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "vertex":
 		models = registry.GetGeminiVertexModels()
 		if len(configModels) > 0 {
@@ -257,10 +252,8 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "antigravity":
 		models = registry.GetAntigravityModels()
-		models = applyExcludedModels(models, excluded)
 	case "claude":
 		models = registry.GetClaudeModels()
 		if len(configModels) > 0 {
@@ -273,7 +266,6 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "codex":
 		codexPlanType := ""
 		if a.Attributes != nil {
@@ -293,7 +285,8 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		}
 		configuredModels := len(configModels) > 0
 		if configuredModels {
-			models = configModels
+			// Refresh built-ins from older snapshots before applying credential exclusions.
+			models = registry.WithCodexBuiltins(configModels)
 		} else if entry := r.resolveConfigCodexKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry)
@@ -308,10 +301,8 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				model.SupportConfigurationUpdate = false
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "kimi", "kimi-ai":
 		models = registry.GetKimiModels()
-		models = applyExcludedModels(models, excluded)
 	case "xai":
 		models = registry.GetXAIModels()
 		if len(configModels) > 0 {
@@ -324,10 +315,8 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	case "devin":
 		models = registry.GetDevinModels()
-		models = applyExcludedModels(models, excluded)
 	case "meta":
 		models = registry.GetMetaModels()
 		if len(configModels) > 0 {
@@ -340,7 +329,6 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				excluded = entry.ExcludedModels
 			}
 		}
-		models = applyExcludedModels(models, excluded)
 	default:
 		if len(configModels) > 0 {
 			providerKey := provider
@@ -356,7 +344,7 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 				providerKey = "openai-compatibility"
 			}
 			forcePrefix := cfg != nil && cfg.ForceModelPrefix
-			r.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(configModels, a.Prefix, forcePrefix))
+			r.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(configModels, a.Prefix, forcePrefix), nil)
 			return
 		}
 		if cfg != nil {
@@ -444,7 +432,7 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 						if providerKey == "" {
 							providerKey = "openai-compatibility"
 						}
-						r.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(ms, a.Prefix, cfg.ForceModelPrefix))
+						r.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(ms, a.Prefix, cfg.ForceModelPrefix), nil)
 					} else {
 						registry.GetGlobalRegistry().UnregisterClient(a.ID)
 					}
@@ -464,15 +452,11 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		key = strings.ToLower(strings.TrimSpace(a.Provider))
 	}
 	models = r.appendPluginModels(key, models)
+	candidates := append([]*ModelInfo{}, models...)
 	models = applyExcludedModels(models, excluded)
 	models = applyOAuthModelAlias(cfg, provider, authKind, models)
-	if len(models) > 0 {
-		forcePrefix := cfg != nil && cfg.ForceModelPrefix
-		r.registerResolvedModelsForAuth(a, key, applyModelPrefixes(models, a.Prefix, forcePrefix))
-		return
-	}
-
-	registry.GetGlobalRegistry().UnregisterClient(a.ID)
+	forcePrefix := cfg != nil && cfg.ForceModelPrefix
+	r.registerResolvedModelsForAuth(a, key, applyModelPrefixes(models, a.Prefix, forcePrefix), candidates)
 }
 
 // oauthExcludedModels handles an oauth excluded models.

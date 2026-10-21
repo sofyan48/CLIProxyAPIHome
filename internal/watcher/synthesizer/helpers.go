@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 )
 
@@ -52,35 +51,18 @@ func (g *StableIDGenerator) Next(kind string, parts ...string) (string, string) 
 	return fmt.Sprintf("%s:%s", kind, short), short
 }
 
-// ApplyAuthExcludedModelsMeta applies excluded models metadata to an auth entry.
+// ApplyAuthExcludedModelsMeta stores the credential's own excluded models on an auth entry.
 // It computes a hash of excluded models and sets the auth_kind attribute.
-// For OAuth entries, perKey (from the JSON file's excluded-models field) is merged
-// with the global oauth-excluded-models config for the provider.
-func ApplyAuthExcludedModelsMeta(auth *coreauth.Auth, cfg *config.Config, perKey []string, authKind string) {
-	if auth == nil || cfg == nil {
+// Global oauth-excluded-models are intentionally not merged here: they are resolved at
+// model registration time, and a non-empty credential list overrides them.
+func ApplyAuthExcludedModelsMeta(auth *coreauth.Auth, perKey []string, authKind string) {
+	if auth == nil {
 		return
 	}
-	authKindKey := strings.ToLower(strings.TrimSpace(authKind))
 	seen := make(map[string]struct{})
-	add := func(list []string) {
-		for _, entry := range list {
-			if trimmed := strings.TrimSpace(entry); trimmed != "" {
-				key := strings.ToLower(trimmed)
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
-			}
-		}
-	}
-	if authKindKey == "apikey" {
-		add(perKey)
-	} else {
-		// For OAuth: merge per-account excluded models with global provider-level exclusions
-		add(perKey)
-		if cfg.OAuthExcludedModels != nil {
-			providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
-			add(cfg.OAuthExcludedModels[providerKey])
+	for _, entry := range perKey {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			seen[strings.ToLower(trimmed)] = struct{}{}
 		}
 	}
 	combined := make([]string, 0, len(seen))
@@ -95,13 +77,30 @@ func ApplyAuthExcludedModelsMeta(auth *coreauth.Auth, cfg *config.Config, perKey
 	if hash != "" {
 		auth.Attributes["excluded_models_hash"] = hash
 	}
-	// Store the combined excluded models list so that routing can read it at runtime
+	// Store only the credential's own rules so global config changes apply without rewriting credentials.
 	if len(combined) > 0 {
 		auth.Attributes["excluded_models"] = strings.Join(combined, ",")
 	}
 	if authKind != "" {
 		auth.Attributes["auth_kind"] = authKind
 	}
+}
+
+// SyncOAuthExcludedModelsAttributes rebuilds the excluded_models attributes of an OAuth auth
+// from its metadata, dropping stale values first because ApplyAuthExcludedModelsMeta never clears them.
+// Invalid rules are skipped and reported in the returned error, so strict callers can reject the
+// update while lenient callers keep the attributes rebuilt from the valid rules.
+func SyncOAuthExcludedModelsAttributes(auth *coreauth.Auth) error {
+	if auth == nil {
+		return nil
+	}
+	excluded, errExcluded := ExtractExcludedModelsFromMetadata(auth.Metadata)
+	if auth.Attributes != nil {
+		delete(auth.Attributes, "excluded_models")
+		delete(auth.Attributes, "excluded_models_hash")
+	}
+	ApplyAuthExcludedModelsMeta(auth, excluded, "oauth")
+	return errExcluded
 }
 
 // addConfigHeadersToAttrs adds header configuration to auth attributes.

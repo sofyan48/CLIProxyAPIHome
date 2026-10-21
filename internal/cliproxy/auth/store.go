@@ -1,6 +1,13 @@
 package auth
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrRuntimeProjectionPersist prevents scheduling projections from replacing
+// complete credentials in any full-record persistence path.
+var ErrRuntimeProjectionPersist = errors.New("auth: cannot persist an incomplete runtime projection")
 
 // Store abstracts persistence of Auth state across restarts.
 type Store interface {

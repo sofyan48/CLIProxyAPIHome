@@ -1780,3 +1780,129 @@ func TestSessionTreeDistinguishesCompactionFromFork(t *testing.T) {
 			forkNode.NodeKind, forkNode.IsFork, forkNode.IsCompaction)
 	}
 }
+
+func TestUsageObservabilityCredentialAggregatesMergeRawIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	if errCreate := db.Create(&AuthRecord{UUID: "cred-uuid", ID: "cred-id", Index: "cred-index", Provider: "codex", Label: "Primary", AuthJSON: JSONB(`{}`)}).Error; errCreate != nil {
+		t.Fatalf("Create(auth) error = %v", errCreate)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	usages := []struct {
+		authIndex string
+		latencyMS int64
+		failed    bool
+	}{
+		{authIndex: "cred-uuid", latencyMS: 100},
+		{authIndex: "cred-index", latencyMS: 200},
+		{authIndex: "cred-id", latencyMS: 600, failed: true},
+		{authIndex: "raw-only", latencyMS: 50},
+	}
+	for index, usage := range usages {
+		record := UsageRecord{
+			Timestamp:    now.Add(time.Duration(index) * time.Second),
+			Provider:     "openai",
+			Model:        "gpt-4.1",
+			AuthIndex:    usage.authIndex,
+			AuthType:     "oauth",
+			InputTokens:  10,
+			OutputTokens: 5,
+			LatencyMS:    usage.latencyMS,
+			Failed:       usage.failed,
+			PayloadJSON:  JSONB(`{}`),
+			CreatedAt:    now,
+		}
+		if errCreate := db.Create(&record).Error; errCreate != nil {
+			t.Fatalf("Create(usage) error = %v", errCreate)
+		}
+	}
+
+	query := UsageObservabilityAggregateQuery{GroupBy: "credential", Metric: "avg_latency_ms", Direction: "desc", Provider: "openai", Limit: 1}
+	result, errList := repo.ListUsageObservabilityAggregates(ctx, query)
+	if errList != nil {
+		t.Fatalf("ListUsageObservabilityAggregates() error = %v", errList)
+	}
+	if result.Total != 2 || len(result.Items) != 1 {
+		t.Fatalf("total/items = %d/%d, want 2/1", result.Total, len(result.Items))
+	}
+	item := result.Items[0]
+	if item.ID != "cred-uuid" || item.Label != "Primary" {
+		t.Fatalf("item id/label = %q/%q, want cred-uuid/Primary", item.ID, item.Label)
+	}
+	if item.RequestCount != 3 || item.SuccessCount != 2 || item.FailedCount != 1 {
+		t.Fatalf("counts = %d/%d/%d, want 3/2/1", item.RequestCount, item.SuccessCount, item.FailedCount)
+	}
+	if item.InputTokens != 30 || item.OutputTokens != 15 {
+		t.Fatalf("tokens = %d/%d, want 30/15", item.InputTokens, item.OutputTokens)
+	}
+	if item.AvgLatencyMS == nil || *item.AvgLatencyMS != 300 {
+		t.Fatalf("avg latency = %v, want 300", item.AvgLatencyMS)
+	}
+	if item.P95LatencyMS == nil || *item.P95LatencyMS != 600 {
+		t.Fatalf("p95 latency = %v, want 600", item.P95LatencyMS)
+	}
+	if item.LastUsedAt == nil || !item.LastUsedAt.UTC().Equal(now.Add(2*time.Second)) {
+		t.Fatalf("last used = %v, want %v", item.LastUsedAt, now.Add(2*time.Second))
+	}
+
+	query.Direction = "asc"
+	query.Metric = "p95_latency_ms"
+	ascending, errAscending := repo.ListUsageObservabilityAggregates(ctx, query)
+	if errAscending != nil {
+		t.Fatalf("ListUsageObservabilityAggregates(asc) error = %v", errAscending)
+	}
+	if len(ascending.Items) != 1 || ascending.Items[0].ID != "raw-only" {
+		t.Fatalf("ascending first item = %+v, want raw-only", ascending.Items)
+	}
+
+	totals, _, errTotals := usageObservabilityTotalsSQL(db, UsageObservabilityRecordQuery{Provider: "openai"})
+	if errTotals != nil {
+		t.Fatalf("usageObservabilityTotalsSQL() error = %v", errTotals)
+	}
+	if totals.RequestCount != 4 || totals.ActiveCredentialCount != 2 {
+		t.Fatalf("totals requests/credentials = %d/%d, want 4/2", totals.RequestCount, totals.ActiveCredentialCount)
+	}
+}
+
+func TestUsageObservabilityCredentialP95KeepsUnmatchedAuthIndexes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	deletedAt := gorm.DeletedAt{Time: time.Now().UTC(), Valid: true}
+	if errCreate := db.Create(&AuthRecord{UUID: "deleted-uuid", ID: "deleted-id", Index: "deleted-index", AuthJSON: JSONB(`{}`), DeletedAt: deletedAt}).Error; errCreate != nil {
+		t.Fatalf("Create(auth) error = %v", errCreate)
+	}
+	now := time.Now().UTC()
+	for index, authIndex := range []string{"", "deleted-index"} {
+		record := UsageRecord{Timestamp: now, Provider: "openai", AuthIndex: authIndex, LatencyMS: int64(100 * (index + 1)), PayloadJSON: JSONB(`{}`), CreatedAt: now}
+		if errCreate := db.Create(&record).Error; errCreate != nil {
+			t.Fatalf("Create(usage) error = %v", errCreate)
+		}
+	}
+
+	values, errValues := usageObservabilityAggregateP95Values(db, UsageObservabilityRecordQuery{}, "credential", []string{"unknown", "deleted-index"})
+	if errValues != nil {
+		t.Fatalf("usageObservabilityAggregateP95Values() error = %v", errValues)
+	}
+	if value := values["unknown"]; !value.Valid || value.Float64 != 100 {
+		t.Fatalf("unknown p95 = %+v, want 100", value)
+	}
+	if value := values["deleted-index"]; !value.Valid || value.Float64 != 200 {
+		t.Fatalf("deleted-index p95 = %+v, want 200", value)
+	}
+}

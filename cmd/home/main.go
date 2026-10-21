@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -419,6 +420,8 @@ func run() int {
 			return currentConfig.ProxyURL
 		},
 	})
+	// Keep the Antigravity quota User-Agent aligned with the CPA request User-Agent.
+	cpasdkauth.StartAntigravityVersionUpdater(runCtx)
 	quotaCollector.Start(runCtx)
 
 	respSrv = respserver.New(addr, rt)

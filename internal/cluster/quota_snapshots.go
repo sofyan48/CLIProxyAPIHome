@@ -1813,7 +1813,7 @@ func quotaCredentialStatus(record AuthRecord, now time.Time) string {
 
 func quotaProviderPlanned(provider string) bool {
 	switch normalizeQuotaProviderID(provider) {
-	case "claude", "antigravity", "codex", "kimi", "xai":
+	case "claude", "antigravity", "codex", "kimi", "xai", "meta":
 		return true
 	default:
 		return false
@@ -1826,6 +1826,8 @@ func normalizeQuotaProviderID(provider string) string {
 		return "claude"
 	case "grok", "xai":
 		return "xai"
+	case "meta", "muse":
+		return "meta"
 	case "gemini_cli", "gemini-cli":
 		return "gemini-cli"
 	default:
