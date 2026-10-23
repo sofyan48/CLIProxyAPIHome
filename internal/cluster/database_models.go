@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 11
+const currentDatabaseVersion = 12
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -483,8 +483,9 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV8Models, true
 	case 9:
 		return databaseSnapshotV9Models, true
-	case 10, currentDatabaseVersion:
-		// Version 11 adds data migrations and indexes without changing the v10 table shapes.
+	case 10, 11, currentDatabaseVersion:
+		// Versions 11 and 12 add migrations, indexes, and runtime-only schema changes
+		// without changing the v10 portable table shapes.
 		return homeDatabaseModels, true
 	default:
 		return nil, false
