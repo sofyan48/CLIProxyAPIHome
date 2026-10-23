@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
@@ -389,10 +390,11 @@ func TestRuntimeConcurrencyAdmitterUsesCurrentHomeIdentity(t *testing.T) {
 	spy := &concurrencyAdmitterSpy{}
 	homeID := cluster.HomeIncarnationID{IP: "127.0.0.1", Port: 8317, StartedAt: time.Now().UTC()}
 	admitter := newRuntimeConcurrencyAdmitter(spy, func() (cluster.HomeIncarnationID, bool) { return homeID, true })
-	if _, errAdmit := admitter.AdmitCredentialConcurrency(context.Background(), home.ConcurrencyAdmissionRequest{CredentialID: "cred", Model: "gpt", Fingerprint: "fp", ConnectedAt: time.Now().UTC(), Controlled: true, ProtocolVersion: 1}); errAdmit != nil {
+	binding := &coreauth.SessionAffinityCommit{Key: strings.Repeat("a", 64), AuthID: "cred", TTL: time.Hour}
+	if _, errAdmit := admitter.AdmitCredentialConcurrency(context.Background(), home.ConcurrencyAdmissionRequest{CredentialID: "cred", Model: "gpt", Fingerprint: "fp", ConnectedAt: time.Now().UTC(), Controlled: true, ProtocolVersion: 1, SessionAffinity: binding}); errAdmit != nil {
 		t.Fatal(errAdmit)
 	}
-	if spy.calls != 1 || spy.request.Lifetime.Home != homeID {
+	if spy.calls != 1 || spy.request.Lifetime.Home != homeID || spy.request.SessionAffinity != binding {
 		t.Fatalf("request = %#v", spy.request)
 	}
 }

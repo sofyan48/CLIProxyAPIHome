@@ -858,11 +858,7 @@ func (r *Repository) ValidateAPIKey(ctx context.Context, apiKey string) (bool, e
 		return false, nil
 	}
 
-	var record APIKeyRecord
-	errFirst := db.WithContext(contextOrBackground(ctx)).
-		Select("id").
-		Where("api_key = ?", apiKey).
-		First(&record).Error
+	_, errFirst := r.findAPIKeyForAccess(ctx, db, apiKey)
 	switch {
 	case errors.Is(errFirst, gorm.ErrRecordNotFound):
 		return false, nil
@@ -884,8 +880,7 @@ func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey str
 		return nil, nil, nil
 	}
 
-	record := APIKeyRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error
+	record, errFirst := r.findAPIKeyForAccess(ctx, db, apiKey)
 	if errFirst != nil {
 		return nil, nil, errFirst
 	}
@@ -921,8 +916,8 @@ func (r *Repository) AllowedDispatchIDsForAPIKeyModel(ctx context.Context, apiKe
 		return nil, nil, nil
 	}
 
-	record := APIKeyRecord{}
-	if errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error; errFirst != nil {
+	record, errFirst := r.findAPIKeyForAccess(ctx, db, apiKey)
+	if errFirst != nil {
 		return nil, nil, errFirst
 	}
 	if errBilling := ensureAPIKeyUserBillingAllowed(ctx, db, &record); errBilling != nil {
@@ -1031,8 +1026,7 @@ func (r *Repository) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string)
 		return nil, nil
 	}
 
-	record := APIKeyRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error
+	record, errFirst := r.findAPIKeyForAccess(ctx, db, apiKey)
 	if errFirst != nil {
 		return nil, errFirst
 	}
@@ -1051,8 +1045,7 @@ func (r *Repository) AllowedModelIDsForAPIKey(ctx context.Context, apiKey string
 		return nil, nil
 	}
 
-	record := APIKeyRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error
+	record, errFirst := r.findAPIKeyForAccess(ctx, db, apiKey)
 	if errFirst != nil {
 		return nil, errFirst
 	}

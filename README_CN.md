@@ -74,7 +74,9 @@ Home 源码仓库不包含生成后的前端产物，`go build` 和 `docker buil
 
 Home 现在始终使用数据库驱动的运行时。没有 `cluster.yaml` 时，Home 使用本地 SQLite 数据库运行同一套调度、节点发现、选主、事件监听、Management 和 RESP 逻辑。默认 SQLite 路径是 `home.db`，可以通过 `-sqlite-path` 覆盖。
 
-存在 `cluster.yaml` 时，Home 启用集群模式，并使用该文件中声明的数据库后端。可以复制 `cluster.sqlite.example.yaml` 或 `cluster.pgsql.example.yaml` 为 `cluster.yaml` 后再修改。PostgreSQL 既支持拆分连接字段，也支持在 `pgsql.postgres_uri` 中填写连接字符串。多节点部署推荐使用 PostgreSQL；SQLite 也可以作为集群后端，但必须配置 `node.external-ip`，否则其他 Home 节点和 CPA 客户端无法稳定发现这个节点。
+存在 `cluster.yaml` 时，Home 启用集群模式，并使用该文件中声明的数据库后端。可以复制 `cluster.sqlite.example.yaml` 或 `cluster.pgsql.example.yaml` 为 `cluster.yaml` 后再修改。PostgreSQL 既支持拆分连接字段，也支持在 `pgsql.postgres_uri` 中填写连接字符串。SQLite 每个数据库仅支持一个 active Home 进程；多 Home 部署必须使用 PostgreSQL。多个 CPA 节点可以连接同一个使用 SQLite 的 Home。SQLite 使用 `cluster.yaml` 时，请配置 `node.external-ip`，确保 CPA 客户端可以访问 Home。
+
+使用 CPA 自动连接均衡前，请先将所有 Home 节点升级到支持该功能的版本；新旧 Home 混合运行期间不保证自动均衡效果。
 
 可以在所选的 `pgsql` 或 `sqlite` 后端下设置 `slow-query-threshold`，控制慢 SQL 日志阈值。该字段接受 `"500ms"`、`"1s"` 等 Go duration 字符串，默认为 `"200ms"`。
 
@@ -113,7 +115,7 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 ## 严格凭证并发限制
 
-启用 credential concurrency policy 前，必须遵循[严格凭证并发限制部署运行手册](docs/CN.md)。手册规定了 SQLite 和 PostgreSQL 所需的拓扑、certificate identity 要求、capability 检查和 fail-closed mixed-version 发布方式。
+凭证并发策略的配置接口与启用前提见 [Management API 文档](docs/management/api_CN.md#credential-concurrency-policy-和-limiter-路由)。
 
 ## 贡献
 

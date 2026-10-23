@@ -390,8 +390,12 @@ func databaseSnapshotV8ModelRegistry() []databaseModel {
 }
 
 var databaseMigrationOnlyModels = []databaseModel{
+	// Session bindings are expiring runtime state, not portable snapshot data.
+	newDatabaseModel[SessionAffinityRecord]("session_affinity", []string{"key"}, false, false),
 	newDatabaseModel[schemaMigrationRecord]("home_schema_migration", []string{"id"}, false, false),
 	newDatabaseModel[ClusterMasterGateRecord]("cluster_master_gate", []string{"id"}, false, false),
+	newDatabaseModel[CPARebalanceClientRecord]("cpa_rebalance_clients", []string{"fingerprint"}, false, false),
+	newDatabaseModel[CPARebalancePlanRecord]("cpa_rebalance_plans", []string{"id"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorRecord]("management_in_flight_snapshot_cursors", []string{"cursor"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorItemRecord]("management_in_flight_snapshot_cursor_items", []string{"cursor", "ordinal"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorObservedRecord]("management_in_flight_snapshot_cursor_observed", []string{"cursor", "credential_id"}, false, false),
