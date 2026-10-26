@@ -11,7 +11,7 @@ import (
 )
 
 func TestRebalanceLocksLifetimeBeforeElectionGateAndClock(t *testing.T) {
-	for _, action := range []string{"ENABLE", "CLAIM", "RESULT"} {
+	for _, action := range []string{"ENABLE", "CLAIM", "RESULT", "LATENCY"} {
 		t.Run(action, func(t *testing.T) {
 			f := newRebalanceFixture(t, 8)
 			f.reconcile(t, 0)
@@ -44,11 +44,18 @@ func TestRebalanceLocksLifetimeBeforeElectionGateAndClock(t *testing.T) {
 				args = append(args, plan.ID, strconv.FormatInt(plan.Term, 10), plan.TargetIP, strconv.Itoa(plan.TargetPort))
 			case "RESULT":
 				args = append(args, plan.ID, "failed")
+			case "LATENCY":
+				args = append(args, `{"process_id":"p","samples":[]}`)
 			}
 			if !rebalanceTestCommand(t, f.handlers[1], f.lifetime(plan), args...) {
 				t.Fatal("command rejected")
 			}
 			want := []string{"cpa_node_membership", "home_process_incarnation", "gate insert", "cluster_master_gate", "database time"}
+			if action == "RESULT" {
+				want = append(want, "cpa_rebalance_clients")
+			} else if action == "LATENCY" {
+				want = []string{"cpa_node_membership", "home_process_incarnation", "cpa_rebalance_clients", "database time"}
+			}
 			if !reflect.DeepEqual(events, want) {
 				t.Fatalf("lock/clock order = %v, want %v", events, want)
 			}

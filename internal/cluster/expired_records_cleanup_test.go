@@ -140,7 +140,7 @@ func TestSessionCleanupCancellation(t *testing.T) {
 }
 
 func TestExpiredCleanupMasterTakeoverAndDemotion(t *testing.T) {
-	for _, name := range []string{"session affinity", "kv store"} {
+	for _, name := range []string{"session affinity", "kv store", "cpa latency summaries", "cpa latency confirmations"} {
 		t.Run(name, func(t *testing.T) {
 			coordinator := NewCoordinator(&Repository{}, NodeIdentity{}, CoordinatorOptions{HeartbeatTimeout: time.Hour})
 			defer coordinator.setMaster(false)

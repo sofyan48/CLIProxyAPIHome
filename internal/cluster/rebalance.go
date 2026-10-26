@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -32,21 +31,24 @@ const (
 )
 
 type CPARebalanceClientRecord struct {
-	Fingerprint string    `gorm:"column:fingerprint;primaryKey"`
-	ConnectedAt time.Time `gorm:"column:connected_at;not null"`
+	Fingerprint            string    `gorm:"column:fingerprint;primaryKey"`
+	ConnectedAt            time.Time `gorm:"column:connected_at;not null"`
+	LatencyConnectedAt     time.Time `gorm:"column:latency_connected_at"`
+	OptimizationEligibleAt time.Time `gorm:"column:optimization_eligible_at"`
 	// NextEligibleAt gates all destinations, including failure backoff and success cooldown.
 	NextEligibleAt time.Time `gorm:"column:next_eligible_at"`
 	// FailedTarget and TargetRetryAt describe the latest failure, not independent target gates.
 	FailedTarget   string        `gorm:"column:failed_target"`
 	TargetRetryAt  time.Time     `gorm:"column:target_retry_at"`
 	FailureBackoff time.Duration `gorm:"column:failure_backoff;not null;default:0"`
-	UpdatedAt      time.Time     `gorm:"column:updated_at"`
+	UpdatedAt      time.Time     `gorm:"column:updated_at;autoUpdateTime:false"`
 }
 
 func (CPARebalanceClientRecord) TableName() string { return "cpa_rebalance_clients" }
 
 type CPARebalancePlanRecord struct {
 	ID                string    `gorm:"column:id;primaryKey"`
+	SwapGroupID       string    `gorm:"column:swap_group_id;index"`
 	Term              int64     `gorm:"column:term;not null"`
 	Fingerprint       string    `gorm:"column:fingerprint;not null;index"`
 	SourceConnectedAt time.Time `gorm:"column:source_connected_at;not null"`
@@ -59,7 +61,7 @@ type CPARebalancePlanRecord struct {
 	State             string    `gorm:"column:state;not null;index:idx_rebalance_active,priority:1"`
 	ExpiresAt         time.Time `gorm:"column:expires_at;not null;index:idx_rebalance_active,priority:2"`
 	CreatedAt         time.Time `gorm:"column:created_at;not null"`
-	UpdatedAt         time.Time `gorm:"column:updated_at;not null;index"`
+	UpdatedAt         time.Time `gorm:"column:updated_at;not null;index;autoUpdateTime:false"`
 }
 
 func (CPARebalancePlanRecord) TableName() string { return "cpa_rebalance_plans" }
@@ -76,8 +78,9 @@ type RebalanceTarget struct {
 }
 
 type rebalanceHome struct {
-	id      HomeIncarnationID
-	capable bool
+	id             HomeIncarnationID
+	capable        bool
+	latencyCapable bool
 }
 
 func rebalanceHomeKey(home HomeIncarnationID) string {
@@ -138,7 +141,7 @@ func loadRebalanceHomes(tx *gorm.DB, now time.Time, timeout time.Duration) (map[
 		if errJSON := json.Unmarshal(process.Capabilities, &capabilities); errJSON != nil {
 			return nil, errJSON
 		}
-		homes[key] = rebalanceHome{id: id, capable: slices.Contains(capabilities, rebalanceCapability)}
+		homes[key] = rebalanceHome{id: id, capable: slices.Contains(capabilities, rebalanceCapability), latencyCapable: slices.Contains(capabilities, rebalanceLatencyCapability)}
 	}
 	return homes, nil
 }
@@ -202,12 +205,16 @@ func finishRebalancePlan(tx *gorm.DB, plan *CPARebalancePlanRecord, state string
 		return errSave
 	}
 	var client CPARebalanceClientRecord
-	if errFirst := tx.First(&client, "fingerprint = ?", plan.Fingerprint).Error; errFirst != nil {
+	// Serialize read-modify-write state with telemetry for this CPA, not just other planners.
+	if errFirst := tx.Clauses(clause.Locking{Strength: "NO KEY UPDATE"}).First(&client, "fingerprint = ?", plan.Fingerprint).Error; errFirst != nil {
 		return errFirst
 	}
 	nextEligibleAt := now.Add(rebalanceInterval)
 	if state == rebalanceCompleted {
 		client.NextEligibleAt = now.Add(rebalanceCooldown)
+		if plan.SwapGroupID != "" {
+			client.OptimizationEligibleAt = now.Add(rebalanceLatencyCooldown)
+		}
 		client.FailureBackoff = 0
 		client.FailedTarget = ""
 		client.TargetRetryAt = time.Time{}
@@ -222,7 +229,21 @@ func finishRebalancePlan(tx *gorm.DB, plan *CPARebalancePlanRecord, state string
 		client.NextEligibleAt = nextEligibleAt
 	}
 	client.UpdatedAt = now
-	return tx.Save(&client).Error
+	if errSave := tx.Save(&client).Error; errSave != nil {
+		return errSave
+	}
+	if plan.SwapGroupID != "" && (state == rebalanceFailed || state == rebalanceCanceled) {
+		var peers []CPARebalancePlanRecord
+		if errFind := tx.Where("swap_group_id = ? AND state = ?", plan.SwapGroupID, rebalancePending).Find(&peers).Error; errFind != nil {
+			return errFind
+		}
+		for index := range peers {
+			if errFinish := finishRebalancePlan(tx, &peers[index], rebalanceCanceled, now); errFinish != nil {
+				return errFinish
+			}
+		}
+	}
+	return nil
 }
 
 // ReconcileRebalances is the only planner. The persisted election gate fences stale masters.
@@ -267,6 +288,13 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 		active := 0
 		for index := range plans {
 			plan := &plans[index]
+			// A failed peer may have canceled this pending leg earlier in this transaction.
+			if errReload := tx.First(plan, "id = ?", plan.ID).Error; errReload != nil {
+				return errReload
+			}
+			if plan.State != rebalancePending && plan.State != rebalanceExecuting {
+				continue
+			}
 			member, exists := byFingerprint[plan.Fingerprint]
 			sourceMatches := exists && membershipOwnedByHome(member, rebalanceSource(*plan)) && member.ConnectedAt.Equal(plan.SourceConnectedAt)
 			targetMatches := exists && membershipOwnedByHome(member, rebalanceTarget(*plan)) && member.ConnectedAt.After(plan.SourceConnectedAt)
@@ -277,6 +305,9 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 			switch {
 			case plan.State == rebalanceExecuting && targetMatches:
 				state = rebalanceCompleted
+			case plan.SwapGroupID != "" && plan.State == rebalanceExecuting && exists && !sourceMatches:
+				// A new lifetime elsewhere is a failed exchange leg, not an in-progress drain.
+				state = rebalanceFailed
 			case !now.Before(plan.ExpiresAt):
 				state = rebalanceFailed
 			case plan.State == rebalancePending && (!sourceMatches || plan.Term != gate.Term):
@@ -290,19 +321,33 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 				}
 				continue
 			}
+		}
+		// Finish the whole group before projecting reservations: a later failure can cancel an earlier peer.
+		plans = nil
+		if errFind := tx.Where("state IN ?", []string{rebalancePending, rebalanceExecuting}).Find(&plans).Error; errFind != nil {
+			return errFind
+		}
+		for _, plan := range plans {
 			busy[plan.Fingerprint] = true
 			active++
-			total += reserveRebalanceLoad(*plan, byFingerprint, loads)
+			total += reserveRebalanceLoad(plan, byFingerprint, loads)
 		}
 		if errDelete := tx.Where("state NOT IN ? AND updated_at < ?", []string{rebalancePending, rebalanceExecuting}, now.Add(-24*time.Hour)).Delete(&CPARebalancePlanRecord{}).Error; errDelete != nil {
 			return errDelete
 		}
-		if len(homes) < 2 || now.Sub(gate.LastBalanceAt) < rebalanceInterval {
+		if now.Sub(gate.LastBalanceAt) < rebalanceInterval {
 			return nil
 		}
 		gate.LastBalanceAt = now
 		if errSave := tx.Save(&gate).Error; errSave != nil {
 			return errSave
+		}
+		if len(homes) < 2 {
+			return nil
+		}
+		latencies, errLatencies := loadRebalanceLatencies(tx, now)
+		if errLatencies != nil {
+			return errLatencies
 		}
 		var clients []CPARebalanceClientRecord
 		if errFind := tx.Find(&clients).Error; errFind != nil {
@@ -323,6 +368,8 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 		for active < rebalanceMaxActive {
 			var chosen CPANodeMembershipRecord
 			sourceKey, targetKey := "", ""
+			var chosenGain time.Duration
+			chosenKnown := false
 			for _, member := range members {
 				client, supported := capabilities[member.CertificateFingerprint]
 				if !supported || busy[member.CertificateFingerprint] || !client.ConnectedAt.Equal(member.ConnectedAt) || now.Before(client.NextEligibleAt) || member.ProtocolVersion != 1 {
@@ -339,8 +386,14 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 					if !candidate.capable || loads[key]-loads[destination] < 2 || float64(loads[destination]) >= average {
 						continue
 					}
-					if sourceKey == "" || loads[key] > loads[sourceKey] || (loads[key] == loads[sourceKey] && (loads[destination] < loads[targetKey] || (loads[destination] == loads[targetKey] && destination < targetKey))) {
+					gain, _, known := latencyBenefit(latencies, member, candidate.id)
+					betterLoad := sourceKey == "" || loads[key] > loads[sourceKey] || (loads[key] == loads[sourceKey] && loads[destination] < loads[targetKey])
+					sameLoad := sourceKey != "" && loads[key] == loads[sourceKey] && loads[destination] == loads[targetKey]
+					betterLatency := known && (!chosenKnown || gain > chosenGain)
+					fallback := known == chosenKnown && (!known || gain == chosenGain) && destination < targetKey
+					if betterLoad || (sameLoad && (betterLatency || fallback)) {
 						chosen, sourceKey, targetKey = member, key, destination
+						chosenGain, chosenKnown = gain, known
 					}
 				}
 			}
@@ -348,10 +401,7 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 				break
 			}
 			target := homes[targetKey].id
-			plan := CPARebalancePlanRecord{ID: uuid.NewString(), Term: gate.Term, Fingerprint: chosen.CertificateFingerprint,
-				SourceConnectedAt: chosen.ConnectedAt, SourceIP: chosen.HomeIP, SourcePort: chosen.HomePort, SourceStartedAt: chosen.HomeStartedAt,
-				TargetIP: target.IP, TargetPort: target.Port, TargetStartedAt: target.StartedAt,
-				State: rebalancePending, ExpiresAt: now.Add(rebalancePlanTTL), CreatedAt: now, UpdatedAt: now}
+			plan := newRebalancePlan(chosen, target, gate.Term, now)
 			if errCreate := tx.Create(&plan).Error; errCreate != nil {
 				return errCreate
 			}
@@ -361,7 +411,7 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 			loads[targetKey]++
 			active++
 		}
-		return nil
+		return planLatencySwap(tx, gate, now, homes, members, loads, capabilities, latencies, active)
 	})
 }
 
@@ -426,10 +476,37 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 		return nil, fmt.Errorf("cluster rebalance: missing action")
 	}
 	accepted := false
+	var probe *RebalanceTarget
 	errTransaction := h.repo.db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
 		// Local dispatch contention must not hold the cluster-wide election gate.
 		if errLifetime := h.repo.LockActiveConcurrencyLifetimeTx(ctx, tx, lifetime); errLifetime != nil {
 			return errLifetime
+		}
+		if strings.EqualFold(args[2], "LATENCY") {
+			if len(args) != 4 {
+				return fmt.Errorf("cluster latency: invalid arguments")
+			}
+			// Serialize reports only for this CPA, including first observations and
+			// read-modify-write failure backoff. Telemetry never takes the election gate.
+			var client CPARebalanceClientRecord
+			if errFirst := tx.Clauses(clause.Locking{Strength: "NO KEY UPDATE"}).First(&client, "fingerprint = ? AND connected_at = ?", lifetime.Fingerprint, lifetime.ConnectedAt).Error; errFirst != nil {
+				return errFirst
+			}
+			now, errNow := DatabaseNow(ctx, tx)
+			if errNow != nil {
+				return errNow
+			}
+			homes, errHomes := loadRebalanceHomes(tx, now, h.coordinator.heartbeatTimeout)
+			if errHomes != nil {
+				return errHomes
+			}
+			var errReport error
+			probe, errReport = acceptLatencyReport(tx, lifetime, args[3], now, homes, client)
+			if errReport != nil {
+				return errReport
+			}
+			accepted = true
+			return nil
 		}
 		// Read database time only after both potentially blocking lock acquisitions.
 		gate, now, errGate := lockRebalanceGate(tx)
@@ -502,7 +579,15 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			for _, other := range others {
 				reserveRebalanceLoad(other, current, loads)
 			}
-			if loads[rebalanceHomeKey(rebalanceSource(plan))]-loads[rebalanceHomeKey(rebalanceTarget(plan))] < 2 {
+			if plan.SwapGroupID != "" {
+				validSwap, errSwap := validateSwapClaim(tx, plan, gate, now, homes, current)
+				if errSwap != nil {
+					return errSwap
+				}
+				if !validSwap {
+					return finishRebalancePlan(tx, &plan, rebalanceCanceled, now)
+				}
+			} else if loads[rebalanceHomeKey(rebalanceSource(plan))]-loads[rebalanceHomeKey(rebalanceTarget(plan))] < 2 {
 				return finishRebalancePlan(tx, &plan, rebalanceCanceled, now)
 			}
 			plan.State, plan.UpdatedAt, plan.ExpiresAt = rebalanceExecuting, now, now.Add(rebalancePlanTTL)
@@ -547,5 +632,9 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 	if errTransaction != nil {
 		return nil, errTransaction
 	}
-	return json.Marshal(map[string]any{"ok": accepted})
+	return json.Marshal(struct {
+		OK           bool             `json:"ok"`
+		Capabilities []string         `json:"capabilities,omitempty"`
+		Probe        *RebalanceTarget `json:"probe,omitempty"`
+	}{OK: accepted, Capabilities: []string{rebalanceLatencyCapability}, Probe: probe})
 }

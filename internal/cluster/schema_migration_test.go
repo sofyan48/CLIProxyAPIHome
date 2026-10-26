@@ -191,6 +191,21 @@ func TestCoordinateSchemaMigrationUpgradesVersion11(t *testing.T) {
 	}
 }
 
+func TestCoordinateSchemaMigrationUpgradesVersion12(t *testing.T) {
+	t.Parallel()
+
+	// A local v12 database can predate the incoming latency tables.
+	store := newFakeSchemaMigrationStore(schemaMigrationState{Version: 12, Initialized: true})
+	result, errCoordinate := coordinateSchemaMigration(t.Context(), currentDatabaseVersion, time.Millisecond, time.Second, false, store.operations())
+	if errCoordinate != nil {
+		t.Fatalf("coordinateSchemaMigration() error = %v", errCoordinate)
+	}
+	state, lockCalls, migrationCalls := store.snapshot()
+	if state.Version != currentDatabaseVersion || lockCalls != 1 || migrationCalls != 1 || !result.MigrationCommitted {
+		t.Fatalf("v12 upgrade result = %+v state=%+v lock_calls=%d migration_calls=%d", result, state, lockCalls, migrationCalls)
+	}
+}
+
 func TestCoordinateSchemaMigrationConcurrentStartersExecuteOnce(t *testing.T) {
 	t.Parallel()
 
@@ -734,6 +749,24 @@ func TestAutoMigratePostgresSchemaVersionGate(t *testing.T) {
 	}
 	if gate.Term != 0 || gate.MasterKey != "" {
 		t.Fatalf("upgraded master gate defaults = %+v", gate)
+	}
+
+	// Simulate a local v12 database without the incoming latency tables.
+	latencyModels := []any{&CPALatencyConfirmationRecord{}, &CPALatencyRecord{}}
+	if errDrop := db.Migrator().DropTable(latencyModels...); errDrop != nil {
+		t.Fatalf("drop latency tables: %v", errDrop)
+	}
+	if errUpdate := db.Model(&schemaMigrationRecord{}).Where("id = ?", schemaMigrationRecordID).Update("version", 12).Error; errUpdate != nil {
+		t.Fatalf("set postgres schema version to v12: %v", errUpdate)
+	}
+	if errMigrate := AutoMigrateContext(ctx, db); errMigrate != nil {
+		t.Fatalf("upgrade postgres latency schema from v12: %v", errMigrate)
+	}
+	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
+	for _, model := range latencyModels {
+		if !db.Migrator().HasTable(model) {
+			t.Fatalf("postgres upgrade did not create latency table for %T", model)
+		}
 	}
 
 	// Simulate an existing v7 database: the new indexes must be installed by the version gate.

@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 12
+const currentDatabaseVersion = 13
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -396,6 +396,8 @@ var databaseMigrationOnlyModels = []databaseModel{
 	newDatabaseModel[ClusterMasterGateRecord]("cluster_master_gate", []string{"id"}, false, false),
 	newDatabaseModel[CPARebalanceClientRecord]("cpa_rebalance_clients", []string{"fingerprint"}, false, false),
 	newDatabaseModel[CPARebalancePlanRecord]("cpa_rebalance_plans", []string{"id"}, false, false),
+	newDatabaseModel[CPALatencyRecord]("cpa_latency_summaries", []string{"fingerprint", "address"}, false, false),
+	newDatabaseModel[CPALatencyConfirmationRecord]("cpa_latency_confirmations", []string{"id"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorRecord]("management_in_flight_snapshot_cursors", []string{"cursor"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorItemRecord]("management_in_flight_snapshot_cursor_items", []string{"cursor", "ordinal"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorObservedRecord]("management_in_flight_snapshot_cursor_observed", []string{"cursor", "credential_id"}, false, false),
@@ -475,6 +477,7 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
+
 	case 6:
 		return databaseSnapshotV6Models, true
 	case 7:
@@ -483,8 +486,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV8Models, true
 	case 9:
 		return databaseSnapshotV9Models, true
-	case 10, 11, currentDatabaseVersion:
-		// Versions 11 and 12 add migrations, indexes, and runtime-only schema changes
+	case 10, 11, 12, currentDatabaseVersion:
+		// Versions 11 through 13 add migrations, indexes, and runtime-only schema changes
 		// without changing the v10 portable table shapes.
 		return homeDatabaseModels, true
 	default:

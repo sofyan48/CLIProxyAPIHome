@@ -329,8 +329,10 @@ func TestCoordinatorStartWaitsForSnapshotOnEveryExit(t *testing.T) {
 			var snapshotCalls atomic.Int64
 			if errRegister := repo.db.Callback().Row().Before("gorm:row").Register("test:hold-runtime-snapshot-clock", func(tx *gorm.DB) {
 				deadline, ok := tx.Statement.Context.Deadline()
-				// Only snapshot clock reads have a deadline; heartbeat queries have none.
-				if tx.Statement.SQL.String() != databaseNowQuery(tx) || !ok {
+				// Snapshot clock reads have a deadline and run outside transactions.
+				// Cleanup clock reads run in transactions; heartbeat queries have no deadline.
+				_, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter)
+				if tx.Statement.SQL.String() != databaseNowQuery(tx) || !ok || inTransaction {
 					return
 				}
 				if time.Until(deadline) > cpaNodeSnapshotRefreshBudget {

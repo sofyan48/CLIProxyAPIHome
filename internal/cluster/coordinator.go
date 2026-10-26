@@ -113,7 +113,7 @@ func (c *Coordinator) Initialize(ctx context.Context) error {
 	if _, errEnsure := c.repo.EnsureLifecycleConfig(ctx, c.heartbeatTimeout); errEnsure != nil {
 		return errEnsure
 	}
-	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2", rebalanceCapability})
+	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2", rebalanceCapability, rebalanceLatencyCapability})
 	if errRegister != nil {
 		return errRegister
 	}
@@ -219,6 +219,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	go c.runRebalanceLoop(cleanupCtx)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "session affinity", c.repo.PurgeExpiredSessionBindings)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "kv store", c.repo.KVPurgeExpired)
+	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "cpa latency summaries", c.repo.PurgeExpiredCPALatencySummaries)
+	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "cpa latency confirmations", c.repo.PurgeExpiredCPALatencyConfirmations)
 
 	snapshotCtx, cancelSnapshot := context.WithCancel(ctx)
 	snapshotTicker := time.NewTicker(min(time.Second, c.heartbeatInterval))

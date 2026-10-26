@@ -48,7 +48,7 @@ func TestRebalanceCommandRequiresControlledMTLSMembership(t *testing.T) {
 			deadline := time.Now().Add(respPipeDeadline)
 			for time.Now().Before(deadline) {
 				output := conn.Output()
-				if registered && strings.Contains(output, `{"ok":true}`) {
+				if registered && strings.Contains(output, `"ok":true`) && strings.Contains(output, `"cpa_latency_swap_v1"`) {
 					return
 				}
 				if !registered && strings.Contains(output, "credential concurrency node is unavailable") {
