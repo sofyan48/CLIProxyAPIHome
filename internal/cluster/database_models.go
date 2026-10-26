@@ -477,7 +477,6 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
-
 	case 6:
 		return databaseSnapshotV6Models, true
 	case 7:
