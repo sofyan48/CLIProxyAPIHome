@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/antigravity"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
@@ -46,6 +47,7 @@ const (
 	antigravityUserInfoEndpoint = "https://www.googleapis.com/oauth2/v2/userinfo?alt=json"
 	antigravityCallbackPort     = 51121
 	antigravityAPIEndpoint      = "https://cloudcode-pa.googleapis.com"
+	antigravityDailyAPIEndpoint = "https://daily-cloudcode-pa.googleapis.com"
 	antigravityAPIVersion       = "v1internal"
 	antigravityFallbackVersion  = "1.21.9"
 	antigravityNodeAPIClientUA  = "google-api-nodejs-client/10.3.0"
@@ -1055,19 +1057,17 @@ func (h *Handler) fetchAntigravityProjectID(ctx context.Context, accessToken str
 	if accessToken == "" {
 		return "", fmt.Errorf("antigravity project: missing access token")
 	}
-	userAgent := antigravityLoadCodeAssistUserAgent()
+	userAgent := cpasdkauth.AntigravityRequestUserAgent("")
 	loadReqBody := map[string]any{
 		"metadata": map[string]string{
-			"ide_type":    "ANTIGRAVITY",
-			"ide_version": antigravityVersionFromUserAgent(userAgent),
-			"ide_name":    "antigravity",
+			"ideType": "ANTIGRAVITY",
 		},
 	}
 	rawBody, errMarshal := json.Marshal(loadReqBody)
 	if errMarshal != nil {
 		return "", fmt.Errorf("marshal request body: %w", errMarshal)
 	}
-	endpointURL := fmt.Sprintf("%s/%s:loadCodeAssist", antigravityAPIEndpoint, antigravityAPIVersion)
+	endpointURL := fmt.Sprintf("%s/%s:loadCodeAssist", antigravityDailyAPIEndpoint, antigravityAPIVersion)
 	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(rawBody))
 	if errRequest != nil {
 		return "", fmt.Errorf("create request: %w", errRequest)
@@ -1075,7 +1075,6 @@ func (h *Handler) fetchAntigravityProjectID(ctx context.Context, accessToken str
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("X-Goog-Api-Client", antigravityGoogAPIClientUA)
 
 	resp, errDo := h.oauthHTTPClient().Do(req)
 	if errDo != nil {
@@ -1126,7 +1125,7 @@ func (h *Handler) onboardAntigravityUser(ctx context.Context, accessToken string
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	userAgent := antigravityLoadCodeAssistUserAgent()
+	userAgent := antigravityOnboardUserUserAgent()
 	requestBody := map[string]any{
 		"tierId": strings.TrimSpace(tierID),
 		"metadata": map[string]string{
@@ -1200,8 +1199,8 @@ func (h *Handler) onboardAntigravityUser(ctx context.Context, accessToken string
 	return "", nil
 }
 
-// antigravityLoadCodeAssistUserAgent handles an antigravity load code assist user agent.
-func antigravityLoadCodeAssistUserAgent() string {
+// antigravityOnboardUserUserAgent preserves the legacy onboarding fingerprint.
+func antigravityOnboardUserUserAgent() string {
 	return fmt.Sprintf("antigravity/%s darwin/arm64 %s", antigravityFallbackVersion, antigravityNodeAPIClientUA)
 }
 

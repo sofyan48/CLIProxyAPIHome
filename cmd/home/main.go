@@ -28,6 +28,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/protocolmux"
 	quotacollector "github.com/router-for-me/CLIProxyAPIHome/internal/quota"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/push"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/usermail"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
@@ -102,6 +103,7 @@ func newRuntimeConcurrencyAdmitter(repo concurrencyAdmissionRepository, currentH
 				Home:        homeID,
 			},
 			ProtocolVersion: req.ProtocolVersion,
+			SessionAffinity: req.SessionAffinity,
 		})
 		return home.ConcurrencyAdmissionResult{Accounted: result.Accounted, CredentialID: result.CredentialID, Model: result.Model}, errAdmit
 	})
@@ -558,6 +560,7 @@ func run() int {
 	go runUsageCacheReadBackfillMaintenance(runCtx, repo)
 	go runUsageTokenAccountingBackfillMaintenance(runCtx, repo)
 	go runInFlightStagingCleanupMaintenance(runCtx, repo, rt)
+	go runLogCleanupMaintenance(runCtx, rt)
 
 	go func() {
 		<-ctx.Done()
@@ -811,6 +814,30 @@ func runUsageDerivedColumnBackfillMaintenance(ctx context.Context, repo *cluster
 		case <-ctx.Done():
 			return
 		case <-time.After(delay):
+		}
+	}
+}
+
+// runLogCleanupMaintenance runs on every Home, independently of cluster leadership.
+func runLogCleanupMaintenance(ctx context.Context, runtime *home.Runtime) {
+	if runtime == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		if cfg := runtime.Config(); cfg != nil {
+			deleted, errCleanup := push.CleanupLogDirectory(ctx, "logs", cfg.LogsMaxTotalSizeMB)
+			if errCleanup != nil && ctx.Err() == nil {
+				log.Warnf("local log directory cleanup failed: %v", errCleanup)
+			} else if deleted > 0 {
+				log.Debugf("removed %d old local log files to enforce the size limit", deleted)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

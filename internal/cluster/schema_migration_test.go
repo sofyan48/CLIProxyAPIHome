@@ -176,6 +176,36 @@ func TestCoordinateSchemaMigrationUpgradesLowerRecordedVersion(t *testing.T) {
 	}
 }
 
+func TestCoordinateSchemaMigrationUpgradesVersion11(t *testing.T) {
+	t.Parallel()
+
+	// Version 11 was shared by schema changes that could be deployed independently.
+	store := newFakeSchemaMigrationStore(schemaMigrationState{Version: 11, Initialized: true})
+	result, errCoordinate := coordinateSchemaMigration(t.Context(), currentDatabaseVersion, time.Millisecond, time.Second, false, store.operations())
+	if errCoordinate != nil {
+		t.Fatalf("coordinateSchemaMigration() error = %v", errCoordinate)
+	}
+	state, lockCalls, migrationCalls := store.snapshot()
+	if state.Version != currentDatabaseVersion || lockCalls != 1 || migrationCalls != 1 || !result.MigrationCommitted {
+		t.Fatalf("v11 upgrade result = %+v state=%+v lock_calls=%d migration_calls=%d", result, state, lockCalls, migrationCalls)
+	}
+}
+
+func TestCoordinateSchemaMigrationUpgradesVersion12(t *testing.T) {
+	t.Parallel()
+
+	// A local v12 database can predate the incoming latency tables.
+	store := newFakeSchemaMigrationStore(schemaMigrationState{Version: 12, Initialized: true})
+	result, errCoordinate := coordinateSchemaMigration(t.Context(), currentDatabaseVersion, time.Millisecond, time.Second, false, store.operations())
+	if errCoordinate != nil {
+		t.Fatalf("coordinateSchemaMigration() error = %v", errCoordinate)
+	}
+	state, lockCalls, migrationCalls := store.snapshot()
+	if state.Version != currentDatabaseVersion || lockCalls != 1 || migrationCalls != 1 || !result.MigrationCommitted {
+		t.Fatalf("v12 upgrade result = %+v state=%+v lock_calls=%d migration_calls=%d", result, state, lockCalls, migrationCalls)
+	}
+}
+
 func TestCoordinateSchemaMigrationConcurrentStartersExecuteOnce(t *testing.T) {
 	t.Parallel()
 
@@ -683,6 +713,61 @@ func TestAutoMigratePostgresSchemaVersionGate(t *testing.T) {
 		}
 	}
 	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
+
+	// Simulate v11 recorded before the coordinator and rebalance schema was added.
+	if errCreate := db.Create(&ClusterMasterGateRecord{ID: 1}).Error; errCreate != nil {
+		t.Fatalf("create legacy master gate row: %v", errCreate)
+	}
+	for _, column := range []string{"term", "master_key", "lease_until", "last_balance_at"} {
+		if errDrop := db.Migrator().DropColumn(&ClusterMasterGateRecord{}, column); errDrop != nil {
+			t.Fatalf("drop master gate column %s: %v", column, errDrop)
+		}
+	}
+	if errDrop := db.Migrator().DropTable(&CPARebalancePlanRecord{}, &CPARebalanceClientRecord{}); errDrop != nil {
+		t.Fatalf("drop rebalance tables: %v", errDrop)
+	}
+	if errUpdate := db.Model(&schemaMigrationRecord{}).Where("id = ?", schemaMigrationRecordID).Update("version", 11).Error; errUpdate != nil {
+		t.Fatalf("set postgres schema version to v11: %v", errUpdate)
+	}
+	if errMigrate := AutoMigrateContext(ctx, db); errMigrate != nil {
+		t.Fatalf("upgrade postgres coordinator schema from v11: %v", errMigrate)
+	}
+	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
+	for _, column := range []string{"term", "master_key", "lease_until", "last_balance_at"} {
+		if !db.Migrator().HasColumn(&ClusterMasterGateRecord{}, column) {
+			t.Fatalf("postgres upgrade did not create master gate column %s", column)
+		}
+	}
+	for _, model := range []any{&CPARebalanceClientRecord{}, &CPARebalancePlanRecord{}} {
+		if !db.Migrator().HasTable(model) {
+			t.Fatalf("postgres upgrade did not create rebalance table for %T", model)
+		}
+	}
+	var gate ClusterMasterGateRecord
+	if errFirst := db.First(&gate, "id = ?", 1).Error; errFirst != nil {
+		t.Fatalf("read upgraded master gate row: %v", errFirst)
+	}
+	if gate.Term != 0 || gate.MasterKey != "" {
+		t.Fatalf("upgraded master gate defaults = %+v", gate)
+	}
+
+	// Simulate a local v12 database without the incoming latency tables.
+	latencyModels := []any{&CPALatencyConfirmationRecord{}, &CPALatencyRecord{}}
+	if errDrop := db.Migrator().DropTable(latencyModels...); errDrop != nil {
+		t.Fatalf("drop latency tables: %v", errDrop)
+	}
+	if errUpdate := db.Model(&schemaMigrationRecord{}).Where("id = ?", schemaMigrationRecordID).Update("version", 12).Error; errUpdate != nil {
+		t.Fatalf("set postgres schema version to v12: %v", errUpdate)
+	}
+	if errMigrate := AutoMigrateContext(ctx, db); errMigrate != nil {
+		t.Fatalf("upgrade postgres latency schema from v12: %v", errMigrate)
+	}
+	assertPostgresSchemaMigrationVersion(t, db, currentDatabaseVersion)
+	for _, model := range latencyModels {
+		if !db.Migrator().HasTable(model) {
+			t.Fatalf("postgres upgrade did not create latency table for %T", model)
+		}
+	}
 
 	// Simulate an existing v7 database: the new indexes must be installed by the version gate.
 	for _, indexName := range []string{"idx_usage_token_accounting_pending_v2", "idx_billing_charge_time_order"} {
